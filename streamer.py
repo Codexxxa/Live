@@ -42,6 +42,8 @@ def get_font_path():
             # On Windows, backslashes need double escaping or forward slashes.
             # Using forward slashes is safest for FFmpeg filters.
             clean_path = font.replace('\\', '/')
+            # Also escape the colon in the drive letter (e.g., C:/ -> C\:/)
+            clean_path = clean_path.replace(':', '\\:')
 
             return clean_path
 
