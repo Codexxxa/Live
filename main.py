@@ -120,21 +120,25 @@ async def run_scan_interface():
 
         async for event in graph.astream(initial_input):
             for key, value in event.items():
-                if key == "agent":
+                # Handle DeepSeek Reasoner Output
+                if key == "reasoner":
                     msg = value["messages"][-1]
                     content = msg.content
                     if content:
-                        console.print(Panel(Markdown(content), title="DeepSeek", border_style="blue"))
+                        console.print(Panel(Markdown(content), title="DeepSeek Reasoner", border_style="blue"))
                         log_content.append(f"\n## Analisis AI\n\n{content}")
-                elif key == "tools":
-                    msg = value["messages"][-1] # This is a ToolMessage
-                    # In LangGraph, tool outputs are in messages.
-                    # Actually, 'tools' node output contains ToolMessage(s).
-                    # Let's handle list if multiple tools called
+
+                # Handle Tool Executor Output
+                elif key == "executor":
+                    # The executor node returns a HumanMessage with the tool output
                     messages = value["messages"]
                     for m in messages:
-                        console.print(f"[dim italic]Tool Output ({m.name}): {str(m.content)[:200]}...[/dim italic]")
-                        log_content.append(f"\n> **Tool ({m.name}) Output**:\n> {str(m.content)[:500]}...\n")
+                        # Extract tool name from content if possible, or just print content
+                        content_str = str(m.content)
+                        preview = content_str[:200] + "..." if len(content_str) > 200 else content_str
+
+                        console.print(f"[dim italic]System/Tool Output: {preview}[/dim italic]")
+                        log_content.append(f"\n> **System/Tool Output**:\n> {content_str}\n")
 
         # Save Log
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
