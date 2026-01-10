@@ -50,14 +50,16 @@ def get_llm_with_proxy():
     # Create httpx Client with proxy if available
     http_client = None
     if proxy_str:
-        # httpx expects 'http://' and 'https://' keys for proxy config
-        # The proxy string from manager is 'http://user:pass@host:port'
-        proxies = {
-            "http://": proxy_str,
-            "https://": proxy_str,
-        }
-        # Verify = False sometimes needed for proxies, but let's try strict first
-        http_client = httpx.Client(proxies=proxies)
+        # httpx >= 0.28.0 uses 'proxy' (singular) or 'mounts' for specific protocols.
+        # But for simple http/https usage with same proxy, 'proxy' arg is preferred.
+        # Check httpx version if needed, but 'proxy' is standard for newer versions.
+        # If we need specific mapping, we might need 'mounts'.
+        # However, for this use case, passing the proxy string directly usually works for all traffic
+        # if it handles both. But let's look at httpx docs pattern.
+        # Actually, httpx.Client(proxy=...) is valid.
+
+        # httpx.Client(proxy="http://...") handles both http and https if using a standard proxy.
+        http_client = httpx.Client(proxy=proxy_str)
 
     llm = ChatOpenAI(
         model="deepseek-chat",
