@@ -1,116 +1,221 @@
-import os
-import httpx
+import json
+import re
 import operator
-from typing import TypedDict, Annotated, List, Any
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
+import httpx
+from typing import TypedDict, Annotated, List, Union
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
 from src.config import get_deepseek_key
 from src.proxy_manager import ProxyManager
 from src.tools import analyze_headers, fetch_page_content, identify_waf, send_custom_request
 
-# System Prompt in Indonesian
-SYSTEM_PROMPT = """Anda adalah AI Security Researcher dan Ethical Hacker yang ahli.
-Tugas Anda adalah melakukan analisis keamanan (vulnerability scanning) pada website yang diberikan oleh pengguna.
-Anda memiliki akses ke berbagai alat untuk menganalisis header, konten halaman, mendeteksi WAF, dan mengirim request kustom.
+# --- System Prompt with Explicit Tool Protocol ---
+SYSTEM_PROMPT = """Anda adalah AI Security Researcher & Ethical Hacker tingkat lanjut (Advanced R1 Model).
+Tugas Anda adalah melakukan penetrasi tes dan analisis kerentanan mendalam pada website target yang diizinkan.
 
-PANDUAN UTAMA:
-1. GUNAKAN ALAT YANG TERSEDIA: Jangan hanya menebak. Gunakan `analyze_headers` untuk cek security headers, `identify_waf` untuk cek firewall, dan `fetch_page_content` untuk melihat source code.
-2. EKSPLORASI MENDALAM: Jika Anda mencurigai sesuatu (misalnya potensi SQL Injection atau XSS), gunakan `send_custom_request` untuk memverifikasi dugaan Anda dengan payload yang aman (safe proof-of-concept).
-3. BAHASA INDONESIA: Semua komunikasi, analisis, dan laporan HARUS dalam Bahasa Indonesia.
-4. STRUKTUR LAPORAN: Jika menemukan celah, jelaskan dengan format:
-   - **Nama Celah**: (Misal: Missing X-Frame-Options)
-   - **Penjelasan**: Apa itu celah ini.
-   - **Dampak/Kerugian**: Apa bahayanya bagi pemilik website.
-   - **Cara Eksploitasi**: Bagaimana hacker bisa memanfaatkannya (secara teoritis/teknis).
-   - **Solusi/Perbaikan**: Langkah konkret untuk menutup celah tersebut.
-5. ETIKA: Anda hanya bekerja pada website yang diizinkan pengguna. Fokus pada menemukan dan memperbaiki.
+**INSTRUKSI UTAMA:**
+1. **Berpikir Kritis (Chain of Thought):** Gunakan kemampuan reasoning Anda untuk merencanakan setiap langkah. Jangan menebak. Verifikasi asumsi dengan alat.
+2. **Gunakan Alat Secara Aktif:** Anda tidak bisa "melihat" website secara langsung. Anda HARUS menggunakan alat yang tersedia untuk mendapatkan informasi.
+3. **Bahasa Indonesia:** Semua output, analisis, dan laporan harus dalam Bahasa Indonesia.
 
-Jangan ragu untuk menggunakan alat berkali-kali jika diperlukan untuk memastikan temuan Anda.
+**DAFTAR ALAT YANG TERSEDIA:**
+
+1.  `analyze_headers(url: str)`
+    -   *Kegunaan:* Mengambil HTTP headers untuk mengecek keamanan (CSP, X-Frame-Options, dll).
+    -   *Kapan dipakai:* Langkah awal wajib untuk melihat postur pertahanan dasar.
+
+2.  `identify_waf(url: str)`
+    -   *Kegunaan:* Menjalankan tool `wafw00f` untuk mendeteksi Firewall (Cloudflare, AWS WAF, dll).
+    -   *Kapan dipakai:* Sebelum melakukan scanning agresif, cek dulu apakah ada proteksi.
+
+3.  `fetch_page_content(url: str)`
+    -   *Kegunaan:* Mengambil source code HTML halaman (maks 10k karakter).
+    -   *Kapan dipakai:* Mencari komentar tersembunyi, versi framework, atau form login.
+
+4.  `send_custom_request(url: str, method: str, data: dict, headers: dict)`
+    -   *Kegunaan:* Mengirim request HTTP spesifik.
+    -   *Kapan dipakai:* Mencoba payload SQL Injection, XSS, atau bypass auth sederhana.
+
+**PROTOKOL PENGGUNAAN ALAT (PENTING):**
+Karena Anda berjalan pada mode Reasoner, Anda TIDAK memiliki akses function calling otomatis.
+Jika Anda ingin menggunakan alat, Anda HARUS mengeluarkan output JSON khusus di akhir respons Anda dengan format berikut:
+
+```json
+{
+  "action": "nama_alat",
+  "args": {
+    "arg1": "nilai1",
+    "arg2": "nilai2"
+  }
+}
+```
+
+**CONTOH ALUR PIKIR:**
+"Saya perlu mengecek apakah website ini memiliki header keamanan yang baik. Saya akan menggunakan alat analyze_headers."
+```json
+{
+  "action": "analyze_headers",
+  "args": {
+    "url": "https://example.com"
+  }
+}
+```
+
+**ATURAN:**
+- HANYA SATU alat per giliran.
+- Tunggu hasil alat diberikan kembali kepada Anda sebelum melanjutkan analisis.
+- Jika Anda sudah selesai menganalisis dan menemukan celah (atau tidak), berikan laporan akhir tanpa blok JSON.
+
+**FORMAT LAPORAN AKHIR (Jika selesai):**
+- **Nama Celah**: ...
+- **Penjelasan**: ...
+- **Bukti (Dari hasil alat)**: ...
+- **Dampak**: ...
+- **Rekomendasi Perbaikan**: ...
 """
 
-# Define State
+# --- State Definition ---
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
+    # We can track loop count if needed to prevent infinite loops, but messages length serves similar purpose
 
-# Tools List
-tools = [analyze_headers, fetch_page_content, identify_waf, send_custom_request]
-tool_node = ToolNode(tools)
+# --- Tool Mapping ---
+TOOL_MAP = {
+    "analyze_headers": analyze_headers,
+    "fetch_page_content": fetch_page_content,
+    "identify_waf": identify_waf,
+    "send_custom_request": send_custom_request
+}
 
-def get_llm_with_proxy():
-    """Configures ChatOpenAI with DeepSeek API and Webshare Proxy."""
+# --- Nodes ---
+
+def get_llm():
     api_key = get_deepseek_key()
-    if not api_key:
-        raise ValueError("DeepSeek API Key belum dikonfigurasi. Silakan atur di menu konfigurasi.")
-
     proxy_manager = ProxyManager()
     proxy_str = proxy_manager.get_proxy_string()
 
-    # Create httpx Client with proxy if available
     http_client = None
     if proxy_str:
-        # httpx >= 0.28.0 uses 'proxy' (singular) or 'mounts' for specific protocols.
-        # But for simple http/https usage with same proxy, 'proxy' arg is preferred.
-        # Check httpx version if needed, but 'proxy' is standard for newer versions.
-        # If we need specific mapping, we might need 'mounts'.
-        # However, for this use case, passing the proxy string directly usually works for all traffic
-        # if it handles both. But let's look at httpx docs pattern.
-        # Actually, httpx.Client(proxy=...) is valid.
+        # Fix: Use 'proxy' arg for single proxy string in newer httpx
+        http_client = httpx.Client(proxy=proxy_str, timeout=60.0)
 
-        # httpx.Client(proxy="http://...") handles both http and https if using a standard proxy.
-        http_client = httpx.Client(proxy=proxy_str)
-
-    llm = ChatOpenAI(
-        model="deepseek-chat",
+    # Using deepseek-reasoner as requested for deep analysis
+    return ChatOpenAI(
+        model="deepseek-reasoner",
         api_key=api_key,
         base_url="https://api.deepseek.com",
         http_client=http_client,
-        temperature=0,
-        streaming=True
+        temperature=0 # Reasoner usually ignores temp, but good practice
     )
-    return llm
 
+def reasoner_node(state: AgentState):
+    messages = state['messages']
+    llm = get_llm()
+
+    # Invoke the model
+    response = llm.invoke(messages)
+    return {"messages": [response]}
+
+def tool_executor_node(state: AgentState):
+    messages = state['messages']
+    last_message = messages[-1]
+    content = last_message.content
+
+    # 1. Extract JSON block
+    # Regex to find ```json ... ``` or just the JSON object if model forgets blocks
+    # We look for the last occurrence of specific JSON structure
+    json_match = re.search(r'```json\s*({.*?})\s*```', content, re.DOTALL)
+    if not json_match:
+        # Try finding raw json at the end
+        json_match = re.search(r'({[\s\S]*"action"[\s\S]*})', content, re.DOTALL)
+
+    if not json_match:
+        return {
+            "messages": [
+                HumanMessage(content="ERROR: Format JSON tidak ditemukan. Mohon ulangi request alat Anda sesuai format protokol.")
+            ]
+        }
+
+    try:
+        action_data = json.loads(json_match.group(1))
+        tool_name = action_data.get("action")
+        args = action_data.get("args", {})
+
+        # 2. Execute Tool
+        if tool_name in TOOL_MAP:
+            tool_func = TOOL_MAP[tool_name]
+            # LangChain tools usually take a single string or dict,
+            # but here we bound python functions directly in tool map?
+            # src/tools.py decorators wrap them. Let's call them directly if possible
+            # or invoke properly.
+            # The decorators make them StructuredTools.
+
+            print(f"Executing {tool_name} with {args}...")
+
+            # Since we imported the decorated tools, we should use .invoke()
+            # args can be passed as dict
+            try:
+                result = tool_func.invoke(args)
+            except Exception as e:
+                result = f"Error executing tool: {str(e)}"
+
+            output_msg = f"**HASIL ALAT ({tool_name})**:\n{result}\n\nSilakan analisis hasil ini dan tentukan langkah selanjutnya."
+
+        else:
+            output_msg = f"ERROR: Alat '{tool_name}' tidak dikenal. Alat yang tersedia: {list(TOOL_MAP.keys())}"
+
+    except json.JSONDecodeError:
+        output_msg = "ERROR: Gagal mem-parsing JSON. Pastikan format valid."
+    except Exception as e:
+        output_msg = f"ERROR SYSTEM: {str(e)}"
+
+    return {"messages": [HumanMessage(content=output_msg)]}
+
+def router(state: AgentState):
+    messages = state['messages']
+    last_message = messages[-1]
+
+    # Check if the model wants to perform an action
+    if "```json" in last_message.content and '"action":' in last_message.content:
+        return "execute_tool"
+    # Fallback looser check
+    if '"action":' in last_message.content and '"args":' in last_message.content:
+        return "execute_tool"
+
+    return END
+
+# --- Graph Construction ---
 def create_agent_graph():
-    llm = get_llm_with_proxy()
-    llm_with_tools = llm.bind_tools(tools)
-
-    def call_model(state):
-        messages = state['messages']
-        response = llm_with_tools.invoke(messages)
-        return {"messages": [response]}
-
-    def should_continue(state):
-        messages = state['messages']
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools"
-        return END
-
     workflow = StateGraph(AgentState)
 
-    workflow.add_node("agent", call_model)
-    workflow.add_node("tools", tool_node)
+    workflow.add_node("reasoner", reasoner_node)
+    workflow.add_node("executor", tool_executor_node)
 
-    workflow.set_entry_point("agent")
+    workflow.set_entry_point("reasoner")
 
     workflow.add_conditional_edges(
-        "agent",
-        should_continue,
+        "reasoner",
+        router,
+        {
+            "execute_tool": "executor",
+            END: END
+        }
     )
-    workflow.add_edge("tools", "agent")
+
+    workflow.add_edge("executor", "reasoner")
 
     return workflow.compile()
 
 def get_initial_input(url: str, focus: str = "") -> dict:
-    """Prepares the initial state for the graph."""
-    content = f"Tolong lakukan analisis keamanan pada website ini: {url}."
+    prompt = f"Target Website: {url}"
     if focus:
-        content += f"\nFokus pencarian pada: {focus}"
+        prompt += f"\nFokus Analisis: {focus}"
+    prompt += "\nMulailah dengan merencanakan langkah analisis Anda, lalu gunakan alat pertama."
 
     return {
         "messages": [
             SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=content)
+            HumanMessage(content=prompt)
         ]
     }
