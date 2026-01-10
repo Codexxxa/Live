@@ -31,7 +31,7 @@ def menu_config():
         current_config = config_manager.load_config()
         print(Fore.YELLOW + "--- KONFIGURASI ---")
         print(f"1. Stream Key   : {current_config['stream_key'][:5]}..." if current_config['stream_key'] else "1. Stream Key   : [KOSONG]")
-        print(f"2. File Video   : {current_config['video_path']}")
+        print(f"2. File/Folder  : {current_config['video_path']}")
         print(f"3. Kualitas     : {current_config['quality']} (high/medium/low)")
         print("4. Kembali ke Menu Utama")
 
@@ -42,13 +42,13 @@ def menu_config():
             if new_key:
                 config_manager.update_config('stream_key', new_key)
         elif choice == '2':
-            new_path = input(r"Masukkan Path Lengkap File Video (contoh C:\Videos\live.mp4): ").strip()
+            new_path = input(r"Masukkan Path Lengkap File Video atau Folder (contoh C:\Videos\): ").strip()
             # Hapus tanda kutip jika user melakukan copy path "..."
             new_path = new_path.replace('"', '')
             if os.path.exists(new_path):
                 config_manager.update_config('video_path', new_path)
             else:
-                input(Fore.RED + f"\nFile tidak ditemukan di: {new_path}\nTekan Enter..." + Style.RESET_ALL)
+                input(Fore.RED + f"\nPath tidak ditemukan: {new_path}\nTekan Enter..." + Style.RESET_ALL)
         elif choice == '3':
             print("\nPilih Kualitas:")
             print("a. High (1080p, Bitrate tinggi)")
