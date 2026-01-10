@@ -41,7 +41,15 @@ def get_font_path():
             # FFmpeg requires paths to be escaped properly in filter strings.
             # On Windows, backslashes need double escaping or forward slashes.
             # Using forward slashes is safest for FFmpeg filters.
-            return font.replace('\\', '/')
+            clean_path = font.replace('\\', '/')
+
+            # On Windows, filter strings separate args with ':'.
+            # A path like 'C:/...' contains a colon.
+            # It should be escaped as 'C\:/...' if inside a filter string.
+            if system == 'Windows':
+                clean_path = clean_path.replace(':', '\\:')
+
+            return clean_path
 
     return None
 
@@ -122,6 +130,23 @@ def build_ffmpeg_command(config, playlist_mode=False):
 
     return command
 
+def mask_command(command):
+    """
+    Menyembunyikan stream key dari log command.
+    """
+    masked = []
+    for arg in command:
+        if "rtmp://" in arg:
+            # Mask stream key (part after live2/)
+            parts = arg.split("live2/")
+            if len(parts) > 1:
+                masked.append(parts[0] + "live2/*****")
+            else:
+                masked.append(arg)
+        else:
+            masked.append(arg)
+    return " ".join(masked)
+
 def start_stream(config):
     """
     Menjalankan proses streaming dengan fitur auto-restart.
@@ -182,6 +207,9 @@ def start_stream(config):
                 print(f"[INFO] File Sumber: {original_video_path}")
             print(f"[INFO] Kualitas: {config['quality']}")
 
+            # Print command for debugging
+            print(f"[DEBUG] Command: {mask_command(command)}")
+
             # Jalankan FFmpeg
             process = subprocess.Popen(
                 command,
@@ -197,9 +225,18 @@ def start_stream(config):
                     if output == '' and process.poll() is not None:
                         break
                     if output:
-                        if "time=" in output:
-                            sys.stdout.write(f"\r[STREAMING] {output.strip().split('bitrate=')[0]}...")
+                        output = output.strip()
+                        # Only filter specific status lines to keep clean UI
+                        # But print everything else to debug errors
+                        if "time=" in output and "bitrate=" in output:
+                            sys.stdout.write(f"\r[STREAMING] {output.split('bitrate=')[0]}...")
                             sys.stdout.flush()
+                        elif "frame=" in output:
+                            # Skip frame= updates if they don't have time (rare)
+                            pass
+                        else:
+                            # Print errors/warnings/info from FFmpeg
+                            print(f"\n[FFMPEG] {output}")
             except KeyboardInterrupt:
                 print("\n\n[STOP] Menghentikan streaming...")
                 process.kill()
