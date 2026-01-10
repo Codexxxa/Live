@@ -43,12 +43,6 @@ def get_font_path():
             # Using forward slashes is safest for FFmpeg filters.
             clean_path = font.replace('\\', '/')
 
-            # On Windows, filter strings separate args with ':'.
-            # A path like 'C:/...' contains a colon.
-            # It should be escaped as 'C\:/...' if inside a filter string.
-            if system == 'Windows':
-                clean_path = clean_path.replace(':', '\\:')
-
             return clean_path
 
     return None
@@ -97,8 +91,8 @@ def build_ffmpeg_command(config, playlist_mode=False):
     # Timer Filter (x=10, y=10 is top left, wait user asked for TOP corner)
     # The prompt said: "tampilan jam yang menghitung waktu ... letakan di pojok atas agar tidak menggangu tampilan video"
     # I will put Timer at Top-Left (10,10) and Hash at Top-Right (w-tw-10, 10)
-    timer_filter = make_drawtext(r'%{pts\:hms}', '10', '10')
-    hash_filter = make_drawtext(f'ID\\: {random_hash}', 'w-tw-10', '10', 'yellow')
+    timer_filter = make_drawtext(r'%{pts:hms}', '10', '10')
+    hash_filter = make_drawtext(f'ID: {random_hash}', 'w-tw-10', '10', 'yellow')
 
     filters = f"{timer_filter},{hash_filter}"
 
