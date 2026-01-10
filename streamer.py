@@ -226,4 +226,6 @@ def start_stream(config):
             return
         except Exception as e:
             print(f"\n[ERROR] Terjadi kesalahan tak terduga: {e}")
+            import traceback
+            traceback.print_exc()
             time.sleep(5)

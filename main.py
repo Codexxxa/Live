@@ -108,6 +108,7 @@ def main_menu():
                 continue
 
             streamer.start_stream(config)
+            input(Fore.YELLOW + "\nStreaming selesai/berhenti. Tekan Enter untuk kembali ke menu..." + Style.RESET_ALL)
 
         elif choice == '2':
             menu_config()
