@@ -19,6 +19,7 @@ from src.tools import (
     exploit_sqli,
     exploit_xss
 )
+from src.external_tools import run_sqlmap, run_dalfox, run_nmap
 
 # --- System Prompt with Explicit Tool Protocol ---
 SYSTEM_PROMPT = """Anda adalah AI Security Researcher & Ethical Hacker tingkat lanjut (DeepSeek R1).
@@ -37,11 +38,14 @@ Tugas Anda adalah melakukan penetrasi tes aktif dan validasi keamanan pada websi
 3.  `scan_attack_surface(url)`: [PENTING] Memetakan semua form, input, parameter URL, dan API endpoint. Gunakan ini daripada membaca source code penuh.
 4.  `render_page(url)`: Render halaman penuh dengan Playwright (untuk SPA/JS-heavy sites).
 5.  `fetch_page_content(url)`: Ambil source HTML mentah (terpotong).
+6.  `run_nmap(url)`: Port scanning untuk melihat layanan yang berjalan.
 
 **Fase 2: Offensive Verification (Serangan Aktif - BUTUH APPROVAL)**
-6.  `exploit_sqli(url, params)`: Mencoba menyuntikkan payload SQL Injection pada parameter target.
-7.  `exploit_xss(url, params)`: Mencoba menyuntikkan payload XSS pada parameter target.
-8.  `send_custom_request(...)`: Untuk serangan custom manual jika perlu.
+7.  `exploit_sqli(url, params)`: [PYTHON-BASED] Mencoba menyuntikkan payload SQL Injection sederhana.
+8.  `exploit_xss(url, params)`: [PYTHON-BASED] Mencoba menyuntikkan payload XSS sederhana.
+9.  `run_sqlmap(url)`: [EXTERNAL TOOL] Menggunakan SQLMap untuk serangan SQLi tingkat lanjut. (Wajib install SQLMap).
+10. `run_dalfox(url)`: [EXTERNAL TOOL] Menggunakan Dalfox untuk serangan XSS tingkat lanjut. (Wajib install Dalfox).
+11. `send_custom_request(...)`: Untuk serangan custom manual jika perlu.
 
 **PROTOKOL KOMUNIKASI & ALAT:**
 Anda harus menggunakan format JSON untuk memanggil alat.
@@ -82,10 +86,13 @@ TOOL_MAP = {
     "scan_attack_surface": scan_attack_surface,
     "render_page": render_page,
     "exploit_sqli": exploit_sqli,
-    "exploit_xss": exploit_xss
+    "exploit_xss": exploit_xss,
+    "run_sqlmap": run_sqlmap,
+    "run_dalfox": run_dalfox,
+    "run_nmap": run_nmap
 }
 
-OFFENSIVE_TOOLS = ["exploit_sqli", "exploit_xss", "send_custom_request"]
+OFFENSIVE_TOOLS = ["exploit_sqli", "exploit_xss", "send_custom_request", "run_sqlmap", "run_dalfox"]
 
 # --- Nodes ---
 
@@ -182,14 +189,12 @@ async def tool_executor_node(state: AgentState):
     return {"messages": [HumanMessage(content=output_msg)]}
 
 def human_approval_node(state: AgentState):
-    # This node just passes. The actual pause happens because we return a state
-    # that requires user input in the main loop, OR we use an interrupt.
-    # In this architecture (LangGraph basic), we can simulating "Wait for user" by returning END
-    # and letting the main loop handle the input injection.
-    # However, to keep it inside the graph, we might use a specific interrupt pattern.
-    # For now, we will assume the router directs here, and we return a message asking for input.
-    # The 'main.py' loop needs to see this message and prompt the user.
     return {"messages": [HumanMessage(content="SYSTEM: APPROVAL_REQUIRED")]}
+
+def continue_prompt_node(state: AgentState):
+    # Force the model to continue if it outputted text but no tool
+    msg = "Analisis belum selesai. Silakan lanjut panggil alat (tool) berikutnya dalam format JSON. Jika sudah selesai, Anda HARUS output 'Laporan Selesai' di dalam teks."
+    return {"messages": [HumanMessage(content=msg)]}
 
 def router(state: AgentState):
     messages = state['messages']
@@ -206,14 +211,8 @@ def router(state: AgentState):
                 data = json.loads(json_match.group(1))
                 tool_name = data.get("action")
 
-                # 2. Check for Offensive Tools -> Approval
-                # But wait, the Prompt says "Don't call tool, output PLAN first".
-                # If DeepSeek follows instructions, it won't output JSON for offensive tools yet.
-                # It will output text "PLAN: ...".
-                # However, if it ignores and outputs JSON directly for offensive tool, we force approval.
                 if tool_name in OFFENSIVE_TOOLS:
                      # Check if we just got approval?
-                     # We can check the previous message from User.
                      prev_msg = messages[-2] if len(messages) > 1 else None
                      if prev_msg and "User Approved" in str(prev_msg.content):
                          return "execute_tool"
@@ -224,18 +223,13 @@ def router(state: AgentState):
             except:
                 pass
 
-    # 3. Check for "PLAN:" keyword (Explicit request for approval)
-    if "PLAN:" in content or "approval" in content.lower():
-        # But only if it's not just part of a thought process.
-        # If it's asking user, we should pause.
-        # Simple heuristic: If no JSON and mentioning Plan/Approval.
-        # Actually, let's stick to the tool interception or explicit JSON.
-        pass
-
-    if not content.strip():
+    # 2. Check for explicit finish
+    if "Laporan Selesai" in content or "Scan Selesai" in content:
         return END
 
-    return END
+    # 3. If no tool and no finish, FORCE CONTINUE
+    # This fixes the bug where reasoning-only outputs cause early exit
+    return "continue_prompt"
 
 def convert_to_openai_messages(messages: List[BaseMessage]) -> List[Dict[str, str]]:
     openai_msgs = []
@@ -255,6 +249,7 @@ def create_agent_graph():
     workflow.add_node("reasoner", reasoner_node)
     workflow.add_node("executor", tool_executor_node)
     workflow.add_node("approval_wait", human_approval_node)
+    workflow.add_node("continue_prompt", continue_prompt_node)
 
     workflow.set_entry_point("reasoner")
 
@@ -264,17 +259,14 @@ def create_agent_graph():
         {
             "execute_tool": "executor",
             "require_approval": "approval_wait",
+            "continue_prompt": "continue_prompt",
             END: END
         }
     )
 
     # After execution, back to reasoner
     workflow.add_edge("executor", "reasoner")
-
-    # After approval wait, we END the graph run momentarily so main.py can get input?
-    # Or we loop back?
-    # The `main.py` needs to handle the "APPROVAL_REQUIRED" message.
-    # If we return END, main.py sees the last message.
+    workflow.add_edge("continue_prompt", "reasoner")
     workflow.add_edge("approval_wait", END)
 
     return workflow.compile()
