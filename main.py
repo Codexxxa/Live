@@ -123,9 +123,14 @@ async def run_scan_interface():
         # --- REFACTORED LOOP FOR HUMAN-IN-THE-LOOP ---
 
         messages = initial_input["messages"]
+        offensive_mode = initial_input["offensive_mode"]
+
         while True:
-            # Create a new graph run with current history
-            current_inputs = {"messages": messages}
+            # Create a new graph run with current history and mode
+            current_inputs = {
+                "messages": messages,
+                "offensive_mode": offensive_mode
+            }
 
             # We track if we hit the approval node in this run
             hit_approval = False
@@ -175,7 +180,8 @@ async def run_scan_interface():
                 # Ask user
                 if Confirm.ask("Izinkan DeepSeek mengeksekusi rencana serangan?", default=False):
                     messages.append(HumanMessage(content="User Approved. Lanjutkan."))
-                    console.print("[green]Melanjutkan...[/green]")
+                    console.print("[green]Melanjutkan... (Mode Offensive Diaktifkan)[/green]")
+                    offensive_mode = True # Enable One-Time Approval for subsequent calls
                 else:
                     messages.append(HumanMessage(content="User Denied. JANGAN lakukan. Ganti strategi."))
                     console.print("[red]Ditolak. Melanjutkan...[/red]")

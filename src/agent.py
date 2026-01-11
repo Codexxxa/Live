@@ -76,6 +76,7 @@ Jika sudah selesai, buat laporan Markdown:
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
     awaiting_approval: bool # Flag to track if we are waiting for user Y/n
+    offensive_mode: bool    # Flag to allow offensive tools without repetitive approval
 
 # --- Tool Mapping ---
 TOOL_MAP = {
@@ -238,62 +239,80 @@ def continue_prompt_node(state: AgentState):
     msg = "Analisis belum selesai. Silakan lanjut panggil alat (tool) berikutnya dalam format JSON. Jika sudah selesai, Anda HARUS output 'Laporan Selesai' di dalam teks."
     return {"messages": [HumanMessage(content=msg)]}
 
+def entry_node(state: AgentState):
+    """Pass-through node to serve as a smart entry point."""
+    return {}
+
 def router(state: AgentState):
     messages = state['messages']
     last_message = messages[-1]
     content = last_message.content
 
-    # 0. Check for Approval Response (User just approved)
+    # 1. Check for Approval Response (User just approved)
     if "User Approved" in str(content):
         return "execute_tool"
 
-    # 1. Check for JSON tool call in AI message
+    # 2. Check for Denial
+    if "User Denied" in str(content):
+        return "reasoner"
+
+    # 3. Check for Initial Prompt (Human) - or any Human input that isn't approval
+    if isinstance(last_message, HumanMessage):
+        return "reasoner"
+
+    # 4. Check for JSON tool call in AI message
     data = extract_json_content(content)
     if data:
         tool_name = data.get("action")
 
         if tool_name in OFFENSIVE_TOOLS:
-             # Look back for RECENT approval (last 3 messages)
-             # History: ... [AI], [Wait], [Approved] ...
+             # Check if offensive mode is enabled
+             if state.get("offensive_mode", False):
+                 return "execute_tool"
 
-             # If we are here, it means the CURRENT message has an offensive tool call.
-             # We should check if this specific tool call was pre-approved by a preceding message.
-
-             # But the Router runs on the output of Reasoner.
-             # Reasoner -> [AIMessage].
-             # messages = [..., UserApproved, AIMessage].
-
-             # If the AI repeats the tool call after approval:
-             # Check if messages[-2] is "User Approved".
+             # Fallback: Check strictly for recent approval (legacy check)
              prev_msg = messages[-2] if len(messages) > 1 else None
              if prev_msg and "User Approved" in str(prev_msg.content):
                  return "execute_tool"
-
-             # Check history for "User Approved" more broadly?
-             # No, approval is one-time per tool call usually.
 
              return "require_approval"
 
         return "execute_tool"
 
-    # 2. Check for explicit finish
+    # 5. Check for explicit finish
     if "Laporan Selesai" in content or "Scan Selesai" in content:
         return END
 
-    # 3. If no tool and no finish, FORCE CONTINUE
+    # 6. If AI message but no tool and no finish -> Force continue
     return "continue_prompt"
 
 # --- Graph Construction ---
 def create_agent_graph():
     workflow = StateGraph(AgentState)
 
+    workflow.add_node("entry_node", entry_node)
     workflow.add_node("reasoner", reasoner_node)
     workflow.add_node("executor", tool_executor_node)
     workflow.add_node("approval_wait", human_approval_node)
     workflow.add_node("continue_prompt", continue_prompt_node)
 
-    workflow.set_entry_point("reasoner")
+    # Set the new entry point
+    workflow.set_entry_point("entry_node")
 
+    # Entry node routes immediately via router logic
+    workflow.add_conditional_edges(
+        "entry_node",
+        router,
+        {
+            "execute_tool": "executor",
+            "require_approval": "approval_wait",
+            "continue_prompt": "continue_prompt",
+            "reasoner": "reasoner",
+            END: END
+        }
+    )
+
+    # Reasoner output also routed via same logic
     workflow.add_conditional_edges(
         "reasoner",
         router,
@@ -301,6 +320,7 @@ def create_agent_graph():
             "execute_tool": "executor",
             "require_approval": "approval_wait",
             "continue_prompt": "continue_prompt",
+            "reasoner": "reasoner", # Should not happen usually, but for safety
             END: END
         }
     )
@@ -322,5 +342,6 @@ def get_initial_input(url: str, focus: str = "") -> dict:
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=prompt)
         ],
-        "awaiting_approval": False
+        "awaiting_approval": False,
+        "offensive_mode": False
     }
