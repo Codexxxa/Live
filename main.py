@@ -137,6 +137,10 @@ async def run_scan_interface():
 
             async for event in graph.astream(current_inputs):
                 for key, value in event.items():
+                    # Check if value is None (e.g. entry_node returning empty dict)
+                    if not value:
+                        continue
+
                     # value is {"messages": [Msg]}
                     new_msgs = value.get("messages", [])
 
