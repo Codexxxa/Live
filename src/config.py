@@ -5,7 +5,7 @@ from pathlib import Path
 ENV_PATH = Path(".env")
 
 def load_config():
-    load_dotenv(dotenv_path=ENV_PATH)
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 def get_deepseek_key():
     return os.getenv("DEEPSEEK_API_KEY")

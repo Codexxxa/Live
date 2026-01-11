@@ -2,10 +2,11 @@ import json
 import re
 import operator
 import httpx
-from typing import TypedDict, Annotated, List, Union
+from typing import TypedDict, Annotated, List, Union, Dict, Any
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
+from openai import AsyncOpenAI
 from src.config import get_deepseek_key
 from src.proxy_manager import ProxyManager
 from src.tools import (
@@ -118,70 +119,99 @@ TOOL_MAP = {
     "analyze_critical_elements": analyze_critical_elements
 }
 
+# --- Helper Functions ---
+
+def convert_to_openai_messages(messages: List[BaseMessage]) -> List[Dict[str, str]]:
+    openai_msgs = []
+    for msg in messages:
+        if isinstance(msg, SystemMessage):
+            openai_msgs.append({"role": "system", "content": msg.content})
+        elif isinstance(msg, HumanMessage):
+            openai_msgs.append({"role": "user", "content": msg.content})
+        elif isinstance(msg, AIMessage):
+            # Clean content for context history (remove our <reasoning> wrapper to avoid confusing the model?)
+            # Actually, keeping reasoning in history is usually good for R1, but the API might not expect it in 'content'.
+            # DeepSeek R1 context handling: usually we just pass 'content'.
+            # If we injected <reasoning>, we should probably strip it or keep it depending on whether we want the model to see its past thoughts.
+            # Standard R1 behavior: it sees its past thoughts if they are in the history.
+            # But the API might handle history differently.
+            # For safety, let's pass the full content we generated (including reasoning wrapper)
+            # OR strip it if it causes issues.
+            # Let's keep it for now as the model generated it (mostly).
+            openai_msgs.append({"role": "assistant", "content": msg.content})
+        else:
+            openai_msgs.append({"role": "user", "content": str(msg.content)})
+    return openai_msgs
+
 # --- Nodes ---
 
-def get_llm():
+def get_async_client():
     api_key = get_deepseek_key()
     proxy_manager = ProxyManager()
     proxy_str = proxy_manager.get_proxy_string()
 
     http_client = None
     if proxy_str:
-        http_client = httpx.Client(proxy=proxy_str, timeout=60.0)
+        http_client = httpx.AsyncClient(proxy=proxy_str, timeout=60.0)
 
-    return ChatOpenAI(
-        model="deepseek-reasoner",
+    return AsyncOpenAI(
         api_key=api_key,
         base_url="https://api.deepseek.com",
         http_client=http_client,
-        temperature=0
+        max_retries=1
     )
 
 async def reasoner_node(state: AgentState):
     messages = state['messages']
-    llm = get_llm()
+    client = get_async_client()
 
-    # Invoke the model
-    # Note: We use ainvoke for async if needed, but standard invoke works if client is sync.
-    # ChatOpenAI uses httpx, so it supports async via ainvoke.
-    response = await llm.ainvoke(messages)
+    openai_messages = convert_to_openai_messages(messages)
 
-    # Extract Reasoning
-    reasoning = ""
-    if hasattr(response, 'additional_kwargs'):
-        reasoning = response.additional_kwargs.get('reasoning_content', "")
+    try:
+        response = await client.chat.completions.create(
+            model="deepseek-reasoner",
+            messages=openai_messages,
+            temperature=0
+        )
 
-    # Also check response_metadata if not found
-    if not reasoning and hasattr(response, 'response_metadata'):
-        reasoning = response.response_metadata.get('reasoning_content', "")
+        choice = response.choices[0]
+        message = choice.message
 
-    # If we found reasoning, prepend it to content for display purposes
-    # We use a custom separator so main.py can parse it back out if needed
-    if reasoning:
-        # We modify the content to include reasoning so the user sees it
-        # Format: <reasoning> ... </reasoning> \n <content> ...
-        new_content = f"<reasoning>\n{reasoning}\n</reasoning>\n\n{response.content}"
-        response.content = new_content
+        reasoning = getattr(message, 'reasoning_content', "")
+        content = message.content if message.content else ""
 
-    return {"messages": [response]}
+        # Combine reasoning and content
+        if reasoning:
+            full_content = f"<reasoning>\n{reasoning}\n</reasoning>\n\n{content}"
+        else:
+            full_content = content
+
+        # If both are empty, that's an error from the model
+        if not full_content.strip():
+            full_content = "ERROR: Model returned empty response."
+
+        return {"messages": [AIMessage(content=full_content)]}
+
+    except Exception as e:
+        return {"messages": [AIMessage(content=f"ERROR SYSTEM (API): {str(e)}")]}
 
 async def tool_executor_node(state: AgentState):
     messages = state['messages']
     last_message = messages[-1]
     content = last_message.content
 
-    # Strip reasoning tags if present to find JSON
-    clean_content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL).strip()
-
     # 1. Extract JSON block
-    json_match = re.search(r'```json\s*({.*?})\s*```', clean_content, re.DOTALL)
+    # Search in full content (including reasoning) to be robust
+    json_match = re.search(r'```json\s*({.*?})\s*```', content, re.DOTALL)
     if not json_match:
-        json_match = re.search(r'({[\s\S]*"action"[\s\S]*})', clean_content, re.DOTALL)
+        json_match = re.search(r'({[\s\S]*"action"[\s\S]*})', content, re.DOTALL)
 
     if not json_match:
+        # If no JSON found, but we are in executor node, something went wrong in routing?
+        # Or we loop back to reasoner with an error instruction
         return {
             "messages": [
-                HumanMessage(content="ERROR: Format JSON tidak ditemukan. Mohon ulangi request alat Anda sesuai format protokol.")
+                HumanMessage(content="ERROR: Saya tidak menemukan format JSON valid untuk penggunaan alat. Silakan ulangi dengan format JSON yang benar: {\"action\": ..., \"args\": ...}")
             ]
         }
 
@@ -223,13 +253,26 @@ def router(state: AgentState):
     last_message = messages[-1]
     content = last_message.content
 
-    # Strip reasoning tags if present
-    clean_content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL).strip()
+    # Check for JSON tool call in FULL content (including reasoning)
+    # R1 sometimes puts the JSON inside the reasoning block
+    if "```json" in content and '"action":' in content:
+        return "execute_tool"
+    if '"action":' in content and '"args":' in content:
+        return "execute_tool"
 
-    if "```json" in clean_content and '"action":' in clean_content:
-        return "execute_tool"
-    if '"action":' in clean_content and '"args":' in clean_content:
-        return "execute_tool"
+    # Check if empty (model error)
+    # If we have content (even just reasoning), we might be done or thinking.
+    # But if no JSON was found above, and we are here:
+    # If content is empty strings, END.
+    if not content.strip():
+        # If content is empty but we have reasoning, maybe we should poke the model?
+        # But for now, if it returns nothing, we can't do much.
+        # Let's return END and assume it's done or failed.
+        # Ideally we should retry, but let's stick to simple logic first.
+        # Actually, if we return END, the user sees nothing.
+        # We should probably force a tool execution error?
+        # No, let's treat it as END for now, but since we capture reasoning, the user will at least see the thinking.
+        return END
 
     return END
 
