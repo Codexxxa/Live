@@ -94,7 +94,7 @@ TOOL_MAP = {
 
 OFFENSIVE_TOOLS = ["exploit_sqli", "exploit_xss", "send_custom_request", "run_sqlmap", "run_dalfox"]
 
-# --- Nodes ---
+# --- Helpers ---
 
 def get_async_client():
     api_key = get_deepseek_key()
@@ -111,6 +111,41 @@ def get_async_client():
         http_client=http_client,
         max_retries=1
     )
+
+def extract_json_content(content: str) -> Union[dict, None]:
+    """
+    Robustly extracts JSON from LLM output, ignoring reasoning blocks.
+    """
+    # 1. Strip reasoning tags and content to avoid false matches
+    clean_content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL).strip()
+
+    # 2. Try matching Markdown JSON block
+    json_match = re.search(r'```json\s*({.*?})\s*```', clean_content, re.DOTALL)
+
+    # 3. Fallback: Try matching the first/widest JSON-like object containing "action"
+    if not json_match:
+        json_match = re.search(r'({[\s\S]*"action"[\s\S]*})', clean_content, re.DOTALL)
+
+    if json_match:
+        try:
+            return json.loads(json_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+def convert_to_openai_messages(messages: List[BaseMessage]) -> List[Dict[str, str]]:
+    openai_msgs = []
+    for msg in messages:
+        if isinstance(msg, SystemMessage):
+            openai_msgs.append({"role": "system", "content": msg.content})
+        elif isinstance(msg, HumanMessage):
+             openai_msgs.append({"role": "user", "content": msg.content})
+        elif isinstance(msg, AIMessage):
+             openai_msgs.append({"role": "assistant", "content": msg.content})
+    return openai_msgs
+
+# --- Nodes ---
 
 async def reasoner_node(state: AgentState):
     messages = state['messages']
@@ -145,27 +180,34 @@ async def reasoner_node(state: AgentState):
 async def tool_executor_node(state: AgentState):
     messages = state['messages']
     last_message = messages[-1]
-    content = last_message.content
+
+    # --- Logic for Post-Approval Execution ---
+    # If the last message is "User Approved", we need to look at the PREVIOUS message (the AI tool call)
+    if "User Approved" in str(last_message.content):
+        # Scan backwards for the last AI message
+        target_message = None
+        for msg in reversed(messages[:-1]):
+            if isinstance(msg, AIMessage):
+                target_message = msg
+                break
+
+        if not target_message:
+            return {"messages": [HumanMessage(content="ERROR: Could not find original tool call after approval.")]}
+
+        content = target_message.content
+    else:
+        # Standard execution
+        content = last_message.content
 
     # Extract JSON
-    json_match = re.search(r'```json\s*({.*?})\s*```', content, re.DOTALL)
-    if not json_match:
-        json_match = re.search(r'({[\s\S]*"action"[\s\S]*})', content, re.DOTALL)
+    action_data = extract_json_content(content)
 
-    if not json_match:
-        return {"messages": [HumanMessage(content="ERROR: JSON format not found.")]}
+    if not action_data:
+        return {"messages": [HumanMessage(content="ERROR: JSON format not found or invalid.")]}
 
     try:
-        action_data = json.loads(json_match.group(1))
         tool_name = action_data.get("action")
         args = action_data.get("args", {})
-
-        # --- Approval Logic Check is done in Router, but double check here ---
-        if tool_name in OFFENSIVE_TOOLS:
-            # If we reached here, it means either:
-            # 1. It's safe/approved
-            # 2. We skipped approval check (should not happen with correct Router)
-            pass
 
         if tool_name in TOOL_MAP:
             tool_func = TOOL_MAP[tool_name]
@@ -201,46 +243,45 @@ def router(state: AgentState):
     last_message = messages[-1]
     content = last_message.content
 
-    # 1. Check for JSON tool call
-    if ("```json" in content and '"action":' in content) or ('"action":' in content and '"args":' in content):
+    # 0. Check for Approval Response (User just approved)
+    if "User Approved" in str(content):
+        return "execute_tool"
 
-        # Parse to see WHICH tool
-        json_match = re.search(r'({[\s\S]*"action"[\s\S]*})', content, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(1))
-                tool_name = data.get("action")
+    # 1. Check for JSON tool call in AI message
+    data = extract_json_content(content)
+    if data:
+        tool_name = data.get("action")
 
-                if tool_name in OFFENSIVE_TOOLS:
-                     # Check if we just got approval?
-                     prev_msg = messages[-2] if len(messages) > 1 else None
-                     if prev_msg and "User Approved" in str(prev_msg.content):
-                         return "execute_tool"
-                     else:
-                         return "require_approval"
+        if tool_name in OFFENSIVE_TOOLS:
+             # Look back for RECENT approval (last 3 messages)
+             # History: ... [AI], [Wait], [Approved] ...
 
-                return "execute_tool"
-            except:
-                pass
+             # If we are here, it means the CURRENT message has an offensive tool call.
+             # We should check if this specific tool call was pre-approved by a preceding message.
+
+             # But the Router runs on the output of Reasoner.
+             # Reasoner -> [AIMessage].
+             # messages = [..., UserApproved, AIMessage].
+
+             # If the AI repeats the tool call after approval:
+             # Check if messages[-2] is "User Approved".
+             prev_msg = messages[-2] if len(messages) > 1 else None
+             if prev_msg and "User Approved" in str(prev_msg.content):
+                 return "execute_tool"
+
+             # Check history for "User Approved" more broadly?
+             # No, approval is one-time per tool call usually.
+
+             return "require_approval"
+
+        return "execute_tool"
 
     # 2. Check for explicit finish
     if "Laporan Selesai" in content or "Scan Selesai" in content:
         return END
 
     # 3. If no tool and no finish, FORCE CONTINUE
-    # This fixes the bug where reasoning-only outputs cause early exit
     return "continue_prompt"
-
-def convert_to_openai_messages(messages: List[BaseMessage]) -> List[Dict[str, str]]:
-    openai_msgs = []
-    for msg in messages:
-        if isinstance(msg, SystemMessage):
-            openai_msgs.append({"role": "system", "content": msg.content})
-        elif isinstance(msg, HumanMessage):
-             openai_msgs.append({"role": "user", "content": msg.content})
-        elif isinstance(msg, AIMessage):
-             openai_msgs.append({"role": "assistant", "content": msg.content})
-    return openai_msgs
 
 # --- Graph Construction ---
 def create_agent_graph():

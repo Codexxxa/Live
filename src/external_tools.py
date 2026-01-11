@@ -2,11 +2,13 @@ import shutil
 import subprocess
 import os
 from typing import Optional, Dict, Any
+from langchain_core.tools import tool
 
 def get_executable_path(tool_name: str) -> Optional[str]:
     """Finds the executable path for a given tool."""
     return shutil.which(tool_name)
 
+@tool
 def run_sqlmap(url: str, params: Optional[Dict[str, Any]] = None) -> str:
     """
     Wraps SQLMap execution.
@@ -56,6 +58,7 @@ def run_sqlmap(url: str, params: Optional[Dict[str, Any]] = None) -> str:
     except Exception as e:
         return f"Error running SQLMap: {str(e)}"
 
+@tool
 def run_dalfox(url: str) -> str:
     """
     Wraps Dalfox execution for XSS scanning.
@@ -83,6 +86,7 @@ def run_dalfox(url: str) -> str:
     except Exception as e:
         return f"Error running Dalfox: {str(e)}"
 
+@tool
 def run_nmap(url: str) -> str:
     """
     Wraps Nmap for port scanning.

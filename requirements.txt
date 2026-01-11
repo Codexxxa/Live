@@ -53,6 +53,5 @@ uuid_utils==0.13.0
 xxhash==3.6.0
 zstandard==0.25.0
 wafw00f
-crawl4ai
 beautifulsoup4
 playwright==1.55.0
