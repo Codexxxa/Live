@@ -14,100 +14,64 @@ from src.tools import (
     fetch_page_content,
     identify_waf,
     send_custom_request,
-    crawl_website,
-    analyze_critical_elements
+    scan_attack_surface,
+    render_page,
+    exploit_sqli,
+    exploit_xss
 )
 
 # --- System Prompt with Explicit Tool Protocol ---
-SYSTEM_PROMPT = """Anda adalah AI Security Researcher & Ethical Hacker tingkat lanjut (Advanced R1 Model).
-Tugas Anda adalah melakukan penetrasi tes dan analisis kerentanan mendalam pada website target yang diizinkan.
+SYSTEM_PROMPT = """Anda adalah AI Security Researcher & Ethical Hacker tingkat lanjut (DeepSeek R1).
+Tugas Anda adalah melakukan penetrasi tes aktif dan validasi keamanan pada website target.
 
-**INSTRUKSI UTAMA:**
-1. **Berpikir Kritis (Chain of Thought):** Gunakan kemampuan reasoning Anda untuk merencanakan setiap langkah. Jangan menebak. Verifikasi asumsi dengan alat.
-2. **Gunakan Alat Secara Aktif:** Anda tidak bisa "melihat" website secara langsung. Anda HARUS menggunakan alat yang tersedia untuk mendapatkan informasi.
-3. **Bahasa Indonesia:** Semua output, analisis, dan laporan harus dalam Bahasa Indonesia.
+**FILOSOFI KERJA (AGGRESSIVE VERIFICATION):**
+1. **Jangan Percaya, Validasi Dulu:** Jangan pernah berasumsi website aman hanya karena terlihat bersih. Tugas Anda adalah MEMBUKTIKAN keamanan dengan mencoba menyerangnya.
+2. **Stress Test:** Jika website terlihat kuat, tingkatkan intensitas. Coba berbagai vektor serangan (SQLi, XSS, Bypass) sampai Anda menemukan celah atau yakin 100%.
+3. **Persetujuan (Approval):** Sebelum menjalankan serangan berbahaya (eksploitasi), Anda WAJIB merumuskan rencana dan meminta persetujuan User.
 
 **DAFTAR ALAT YANG TERSEDIA:**
 
-1.  `analyze_headers(url: str)`
-    -   *Kegunaan:* Mengambil HTTP headers untuk mengecek keamanan (CSP, X-Frame-Options, dll).
-    -   *Kapan dipakai:* Langkah awal wajib untuk melihat postur pertahanan dasar.
+**Fase 1: Reconnaissance (Pengumpulan Informasi)**
+1.  `analyze_headers(url)`: Cek header keamanan dasar.
+2.  `identify_waf(url)`: Cek keberadaan Firewall.
+3.  `scan_attack_surface(url)`: [PENTING] Memetakan semua form, input, parameter URL, dan API endpoint. Gunakan ini daripada membaca source code penuh.
+4.  `render_page(url)`: Render halaman penuh dengan Playwright (untuk SPA/JS-heavy sites).
+5.  `fetch_page_content(url)`: Ambil source HTML mentah (terpotong).
 
-2.  `identify_waf(url: str)`
-    -   *Kegunaan:* Menjalankan tool `wafw00f` untuk mendeteksi Firewall (Cloudflare, AWS WAF, dll).
-    -   *Kapan dipakai:* Sebelum melakukan scanning agresif, cek dulu apakah ada proteksi.
+**Fase 2: Offensive Verification (Serangan Aktif - BUTUH APPROVAL)**
+6.  `exploit_sqli(url, params)`: Mencoba menyuntikkan payload SQL Injection pada parameter target.
+7.  `exploit_xss(url, params)`: Mencoba menyuntikkan payload XSS pada parameter target.
+8.  `send_custom_request(...)`: Untuk serangan custom manual jika perlu.
 
-3.  `fetch_page_content(url: str)`
-    -   *Kegunaan:* Mengambil source code HTML halaman (maks 10k karakter).
-    -   *Kapan dipakai:* Mencari komentar tersembunyi, versi framework, atau form login.
-
-4.  `send_custom_request(url: str, method: str, data: dict, headers: dict)`
-    -   *Kegunaan:* Mengirim request HTTP spesifik.
-    -   *Kapan dipakai:* Mencoba payload SQL Injection, XSS, atau bypass auth sederhana.
-
-5.  `crawl_website(url: str)`
-    -   *Kegunaan:* Menggunakan headless browser untuk merender halaman yang kompleks (JavaScript/SPA).
-    -   *Kapan dipakai:* Jika `fetch_page_content` hanya mengembalikan HTML kosong atau shell aplikasi JS.
-
-6.  `analyze_critical_elements(url: str)`
-    -   *Kegunaan:* Menganalisis elemen kritis (Form, Input, Script, Komentar) dari halaman.
-    -   *Kapan dipakai:* Untuk mengurangi noise dan fokus pada vektor serangan potensial.
-
-**PROTOKOL PENGGUNAAN ALAT (PENTING):**
-Karena Anda berjalan pada mode Reasoner, Anda TIDAK memiliki akses function calling otomatis.
-Jika Anda ingin menggunakan alat, Anda HARUS mengeluarkan output JSON khusus di akhir respons Anda dengan format berikut:
+**PROTOKOL KOMUNIKASI & ALAT:**
+Anda harus menggunakan format JSON untuk memanggil alat.
 
 ```json
 {
   "action": "nama_alat",
-  "args": {
-    "arg1": "nilai1",
-    "arg2": "nilai2"
-  }
+  "args": { ... }
 }
 ```
 
-**CONTOH ALUR PIKIR:**
-"Saya perlu mengecek apakah website ini memiliki header keamanan yang baik. Saya akan menggunakan alat analyze_headers."
-```json
-{
-  "action": "analyze_headers",
-  "args": {
-    "url": "https://example.com"
-  }
-}
-```
+**ATURAN KHUSUS UNTUK SERANGAN (OFFENSIVE TOOLS):**
+Jika Anda ingin menggunakan `exploit_sqli`, `exploit_xss`, atau serangan agresif lainnya:
+1.  **PANGGIL ALAT TERSEBUT SECARA LANGSUNG** dalam JSON (misal: `{"action": "exploit_sqli", ...}`).
+2.  Sistem akan otomatis menahan eksekusi tersebut (INTERCEPT) dan meminta izin User ("Approval Required").
+3.  JANGAN menunggu atau bertanya manual lewat teks. Langsung panggil alatnya, biarkan sistem yang mengurus izin.
+4.  Jika User mengizinkan, alat akan dijalankan pada giliran berikutnya. Jika ditolak, Anda harus mencari strategi lain.
 
-**ATURAN:**
-- HANYA SATU alat per giliran.
-- Tunggu hasil alat diberikan kembali kepada Anda sebelum melanjutkan analisis.
-- Jika Anda sudah selesai menganalisis dan menemukan celah (atau tidak), berikan laporan akhir tanpa blok JSON.
-
-**FORMAT LAPORAN AKHIR (WAJIB JIKA SELESAI):**
-Laporan akhir harus mengikuti struktur berikut secara ketat:
-
-# Laporan Kerentanan: [Nama Website]
-
-## 1. Identifikasi Celah
-- **Jenis Celah**: (Misal: XSS, SQLi, Misconfiguration, atau "Tidak Ditemukan")
-- **Tingkat Risiko**: (Low/Medium/High/Critical)
-- **Lokasi**: (URL atau Parameter yang rentan)
-
-## 2. Analisis Dampak (Impact)
-- Jelaskan kerugian apa yang bisa disebabkan oleh celah ini.
-- Contoh: "Penyerang dapat mencuri cookie session pengguna..."
-
-## 3. Metode Eksploitasi (Proof of Concept)
-- Jelaskan bagaimana hacker akan memanfaatkan celah ini.
-- Sertakan contoh payload atau langkah-langkah serangan (jika aman).
-
-## 4. Rekomendasi Perbaikan
-- Langkah teknis untuk menutup celah tersebut.
+**FORMAT LAPORAN AKHIR:**
+Jika sudah selesai, buat laporan Markdown:
+# Laporan Penetration Test: [Website]
+## Ringkasan Eksekutif
+## Temuan Kerentanan (Bukti/Proof of Concept)
+## Rekomendasi
 """
 
 # --- State Definition ---
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
+    awaiting_approval: bool # Flag to track if we are waiting for user Y/n
 
 # --- Tool Mapping ---
 TOOL_MAP = {
@@ -115,33 +79,13 @@ TOOL_MAP = {
     "fetch_page_content": fetch_page_content,
     "identify_waf": identify_waf,
     "send_custom_request": send_custom_request,
-    "crawl_website": crawl_website,
-    "analyze_critical_elements": analyze_critical_elements
+    "scan_attack_surface": scan_attack_surface,
+    "render_page": render_page,
+    "exploit_sqli": exploit_sqli,
+    "exploit_xss": exploit_xss
 }
 
-# --- Helper Functions ---
-
-def convert_to_openai_messages(messages: List[BaseMessage]) -> List[Dict[str, str]]:
-    openai_msgs = []
-    for msg in messages:
-        if isinstance(msg, SystemMessage):
-            openai_msgs.append({"role": "system", "content": msg.content})
-        elif isinstance(msg, HumanMessage):
-            openai_msgs.append({"role": "user", "content": msg.content})
-        elif isinstance(msg, AIMessage):
-            # Clean content for context history (remove our <reasoning> wrapper to avoid confusing the model?)
-            # Actually, keeping reasoning in history is usually good for R1, but the API might not expect it in 'content'.
-            # DeepSeek R1 context handling: usually we just pass 'content'.
-            # If we injected <reasoning>, we should probably strip it or keep it depending on whether we want the model to see its past thoughts.
-            # Standard R1 behavior: it sees its past thoughts if they are in the history.
-            # But the API might handle history differently.
-            # For safety, let's pass the full content we generated (including reasoning wrapper)
-            # OR strip it if it causes issues.
-            # Let's keep it for now as the model generated it (mostly).
-            openai_msgs.append({"role": "assistant", "content": msg.content})
-        else:
-            openai_msgs.append({"role": "user", "content": str(msg.content)})
-    return openai_msgs
+OFFENSIVE_TOOLS = ["exploit_sqli", "exploit_xss", "send_custom_request"]
 
 # --- Nodes ---
 
@@ -163,8 +107,10 @@ def get_async_client():
 
 async def reasoner_node(state: AgentState):
     messages = state['messages']
-    client = get_async_client()
+    # Ensure awaiting_approval is False unless set otherwise
+    state['awaiting_approval'] = False
 
+    client = get_async_client()
     openai_messages = convert_to_openai_messages(messages)
 
     try:
@@ -180,13 +126,7 @@ async def reasoner_node(state: AgentState):
         reasoning = getattr(message, 'reasoning_content', "")
         content = message.content if message.content else ""
 
-        # Combine reasoning and content
-        if reasoning:
-            full_content = f"<reasoning>\n{reasoning}\n</reasoning>\n\n{content}"
-        else:
-            full_content = content
-
-        # If both are empty, that's an error from the model
+        full_content = f"<reasoning>\n{reasoning}\n</reasoning>\n\n{content}" if reasoning else content
         if not full_content.strip():
             full_content = "ERROR: Model returned empty response."
 
@@ -200,81 +140,113 @@ async def tool_executor_node(state: AgentState):
     last_message = messages[-1]
     content = last_message.content
 
-    # 1. Extract JSON block
-    # Search in full content (including reasoning) to be robust
+    # Extract JSON
     json_match = re.search(r'```json\s*({.*?})\s*```', content, re.DOTALL)
     if not json_match:
         json_match = re.search(r'({[\s\S]*"action"[\s\S]*})', content, re.DOTALL)
 
     if not json_match:
-        # If no JSON found, but we are in executor node, something went wrong in routing?
-        # Or we loop back to reasoner with an error instruction
-        return {
-            "messages": [
-                HumanMessage(content="ERROR: Saya tidak menemukan format JSON valid untuk penggunaan alat. Silakan ulangi dengan format JSON yang benar: {\"action\": ..., \"args\": ...}")
-            ]
-        }
+        return {"messages": [HumanMessage(content="ERROR: JSON format not found.")]}
 
     try:
         action_data = json.loads(json_match.group(1))
         tool_name = action_data.get("action")
         args = action_data.get("args", {})
 
-        # 2. Execute Tool
+        # --- Approval Logic Check is done in Router, but double check here ---
+        if tool_name in OFFENSIVE_TOOLS:
+            # If we reached here, it means either:
+            # 1. It's safe/approved
+            # 2. We skipped approval check (should not happen with correct Router)
+            pass
+
         if tool_name in TOOL_MAP:
             tool_func = TOOL_MAP[tool_name]
-
-            print(f"Executing {tool_name} with {args}...")
+            print(f"Executing {tool_name}...")
 
             try:
-                # Use ainvoke for async tools
                 result = await tool_func.ainvoke(args)
-            except Exception as e:
-                # Fallback to sync invoke if ainvoke fails or not implemented
+            except Exception:
                 try:
                     result = tool_func.invoke(args)
                 except Exception as e2:
-                    result = f"Error executing tool: {str(e2)}"
+                    result = f"Error: {str(e2)}"
 
-            output_msg = f"**HASIL ALAT ({tool_name})**:\n{result}\n\nSilakan analisis hasil ini dan tentukan langkah selanjutnya."
-
+            output_msg = f"**HASIL ALAT ({tool_name})**:\n{result}\n\nLanjutkan analisis."
         else:
-            output_msg = f"ERROR: Alat '{tool_name}' tidak dikenal. Alat yang tersedia: {list(TOOL_MAP.keys())}"
+            output_msg = f"ERROR: Unknown tool '{tool_name}'."
 
-    except json.JSONDecodeError:
-        output_msg = "ERROR: Gagal mem-parsing JSON. Pastikan format valid."
     except Exception as e:
         output_msg = f"ERROR SYSTEM: {str(e)}"
 
     return {"messages": [HumanMessage(content=output_msg)]}
+
+def human_approval_node(state: AgentState):
+    # This node just passes. The actual pause happens because we return a state
+    # that requires user input in the main loop, OR we use an interrupt.
+    # In this architecture (LangGraph basic), we can simulating "Wait for user" by returning END
+    # and letting the main loop handle the input injection.
+    # However, to keep it inside the graph, we might use a specific interrupt pattern.
+    # For now, we will assume the router directs here, and we return a message asking for input.
+    # The 'main.py' loop needs to see this message and prompt the user.
+    return {"messages": [HumanMessage(content="SYSTEM: APPROVAL_REQUIRED")]}
 
 def router(state: AgentState):
     messages = state['messages']
     last_message = messages[-1]
     content = last_message.content
 
-    # Check for JSON tool call in FULL content (including reasoning)
-    # R1 sometimes puts the JSON inside the reasoning block
-    if "```json" in content and '"action":' in content:
-        return "execute_tool"
-    if '"action":' in content and '"args":' in content:
-        return "execute_tool"
+    # 1. Check for JSON tool call
+    if ("```json" in content and '"action":' in content) or ('"action":' in content and '"args":' in content):
 
-    # Check if empty (model error)
-    # If we have content (even just reasoning), we might be done or thinking.
-    # But if no JSON was found above, and we are here:
-    # If content is empty strings, END.
+        # Parse to see WHICH tool
+        json_match = re.search(r'({[\s\S]*"action"[\s\S]*})', content, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group(1))
+                tool_name = data.get("action")
+
+                # 2. Check for Offensive Tools -> Approval
+                # But wait, the Prompt says "Don't call tool, output PLAN first".
+                # If DeepSeek follows instructions, it won't output JSON for offensive tools yet.
+                # It will output text "PLAN: ...".
+                # However, if it ignores and outputs JSON directly for offensive tool, we force approval.
+                if tool_name in OFFENSIVE_TOOLS:
+                     # Check if we just got approval?
+                     # We can check the previous message from User.
+                     prev_msg = messages[-2] if len(messages) > 1 else None
+                     if prev_msg and "User Approved" in str(prev_msg.content):
+                         return "execute_tool"
+                     else:
+                         return "require_approval"
+
+                return "execute_tool"
+            except:
+                pass
+
+    # 3. Check for "PLAN:" keyword (Explicit request for approval)
+    if "PLAN:" in content or "approval" in content.lower():
+        # But only if it's not just part of a thought process.
+        # If it's asking user, we should pause.
+        # Simple heuristic: If no JSON and mentioning Plan/Approval.
+        # Actually, let's stick to the tool interception or explicit JSON.
+        pass
+
     if not content.strip():
-        # If content is empty but we have reasoning, maybe we should poke the model?
-        # But for now, if it returns nothing, we can't do much.
-        # Let's return END and assume it's done or failed.
-        # Ideally we should retry, but let's stick to simple logic first.
-        # Actually, if we return END, the user sees nothing.
-        # We should probably force a tool execution error?
-        # No, let's treat it as END for now, but since we capture reasoning, the user will at least see the thinking.
         return END
 
     return END
+
+def convert_to_openai_messages(messages: List[BaseMessage]) -> List[Dict[str, str]]:
+    openai_msgs = []
+    for msg in messages:
+        if isinstance(msg, SystemMessage):
+            openai_msgs.append({"role": "system", "content": msg.content})
+        elif isinstance(msg, HumanMessage):
+             openai_msgs.append({"role": "user", "content": msg.content})
+        elif isinstance(msg, AIMessage):
+             openai_msgs.append({"role": "assistant", "content": msg.content})
+    return openai_msgs
 
 # --- Graph Construction ---
 def create_agent_graph():
@@ -282,6 +254,7 @@ def create_agent_graph():
 
     workflow.add_node("reasoner", reasoner_node)
     workflow.add_node("executor", tool_executor_node)
+    workflow.add_node("approval_wait", human_approval_node)
 
     workflow.set_entry_point("reasoner")
 
@@ -290,11 +263,19 @@ def create_agent_graph():
         router,
         {
             "execute_tool": "executor",
+            "require_approval": "approval_wait",
             END: END
         }
     )
 
+    # After execution, back to reasoner
     workflow.add_edge("executor", "reasoner")
+
+    # After approval wait, we END the graph run momentarily so main.py can get input?
+    # Or we loop back?
+    # The `main.py` needs to handle the "APPROVAL_REQUIRED" message.
+    # If we return END, main.py sees the last message.
+    workflow.add_edge("approval_wait", END)
 
     return workflow.compile()
 
@@ -302,11 +283,11 @@ def get_initial_input(url: str, focus: str = "") -> dict:
     prompt = f"Target Website: {url}"
     if focus:
         prompt += f"\nFokus Analisis: {focus}"
-    prompt += "\nMulailah dengan merencanakan langkah analisis Anda, lalu gunakan alat pertama."
-
+    prompt += "\nMulailah dengan Reconnaissance."
     return {
         "messages": [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=prompt)
-        ]
+        ],
+        "awaiting_approval": False
     }

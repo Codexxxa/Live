@@ -9,6 +9,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.markdown import Markdown
 from rich.live import Live
+from langchain_core.messages import HumanMessage
 from src.config import get_deepseek_key, get_webshare_key, set_deepseek_key, set_webshare_key, load_config
 from src.agent import create_agent_graph, get_initial_input
 
@@ -119,54 +120,193 @@ async def run_scan_interface():
 
         console.print("[dim]Agen sedang berpikir dan menjalankan alat...[/dim]\n")
 
-        async for event in graph.astream(initial_input):
-            for key, value in event.items():
-                # Handle DeepSeek Reasoner Output
-                if key == "reasoner":
-                    msg = value["messages"][-1]
-                    content = msg.content
+        # State tracking for manual updates
+        current_state = initial_input
 
-                    if content:
-                        # Split reasoning and actual content
-                        reasoning_match = re.search(r'<reasoning>(.*?)</reasoning>', content, re.DOTALL)
-                        reasoning_text = reasoning_match.group(1).strip() if reasoning_match else ""
+        # We manually iterate because we might need to inject user input
+        while True:
+            # We use invoke/astream but since we need to interrupt, we'll stream until interruption
+            # Actually, standard pattern for human-in-the-loop with simple graph:
+            # Run graph until it stops (END) or yields an interrupt signal.
+            # Our "human_approval_node" returns a message and points to END.
 
-                        clean_content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL).strip()
+            # Since we modified the graph to return END after approval_wait,
+            # we need to check the output.
 
-                        # Display Reasoning
-                        if reasoning_text:
-                            console.print(Panel(Markdown(reasoning_text), title="[bold blue]DeepSeek Reasoner (Thinking Process)[/bold blue]", border_style="blue", title_align="left"))
-                            log_content.append(f"\n### Reasoning Process\n{reasoning_text}\n")
+            async for event in graph.astream(current_state):
+                for key, value in event.items():
+                    # Handle DeepSeek Reasoner Output
+                    if key == "reasoner":
+                        msg = value["messages"][-1]
+                        content = msg.content
 
-                        # Display Action/JSON
-                        if clean_content:
-                            console.print(Panel(Markdown(clean_content), title="[bold green]DeepSeek Action[/bold green]", border_style="green", title_align="left"))
-                            log_content.append(f"\n### Action Decision\n{clean_content}\n")
+                        if content:
+                            # Split reasoning and actual content
+                            reasoning_match = re.search(r'<reasoning>(.*?)</reasoning>', content, re.DOTALL)
+                            reasoning_text = reasoning_match.group(1).strip() if reasoning_match else ""
 
-                # Handle Tool Executor Output
-                elif key == "executor":
-                    # The executor node returns a HumanMessage with the tool output
-                    messages = value["messages"]
-                    for m in messages:
-                        content_str = str(m.content)
+                            clean_content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL).strip()
 
-                        # Create a summary for display
-                        display_summary = f"[dim]Tool execution completed. Output length: {len(content_str)} chars.[/dim]"
-                        if "**HASIL ALAT" in content_str:
-                             # Extract tool name
-                             tool_header = content_str.split('\n')[0]
-                             display_summary = f"[bold magenta]{tool_header}[/bold magenta]\n[dim]Output truncated for readability. See logs for full details.[/dim]"
+                            # Display Reasoning
+                            if reasoning_text:
+                                console.print(Panel(Markdown(reasoning_text), title="[bold blue]DeepSeek Reasoner (Thinking Process)[/bold blue]", border_style="blue", title_align="left"))
+                                log_content.append(f"\n### Reasoning Process\n{reasoning_text}\n")
 
-                             # Maybe show a small preview if it's text
-                             preview_lines = content_str.split('\n')
-                             if len(preview_lines) > 5:
-                                 preview = "\n".join(preview_lines[:5]) + "\n..."
-                                 display_summary += f"\n\n[italic]{preview}[/italic]"
-                             else:
-                                 display_summary += f"\n\n[italic]{content_str}[/italic]"
+                            # Display Action/JSON
+                            if clean_content:
+                                console.print(Panel(Markdown(clean_content), title="[bold green]DeepSeek Action[/bold green]", border_style="green", title_align="left"))
+                                log_content.append(f"\n### Action Decision\n{clean_content}\n")
 
-                        console.print(Panel(display_summary, title="System Output", border_style="white"))
-                        log_content.append(f"\n> **System/Tool Output**:\n> {content_str}\n")
+                    # Handle Tool Executor Output
+                    elif key == "executor":
+                        messages = value["messages"]
+                        for m in messages:
+                            content_str = str(m.content)
+
+                            # Create a summary for display
+                            display_summary = f"[dim]Tool execution completed. Output length: {len(content_str)} chars.[/dim]"
+                            if "**HASIL ALAT" in content_str:
+                                 # Extract tool name
+                                 tool_header = content_str.split('\n')[0]
+                                 display_summary = f"[bold magenta]{tool_header}[/bold magenta]\n[dim]Output truncated for readability. See logs for full details.[/dim]"
+
+                                 preview_lines = content_str.split('\n')
+                                 if len(preview_lines) > 5:
+                                     preview = "\n".join(preview_lines[:5]) + "\n..."
+                                     display_summary += f"\n\n[italic]{preview}[/italic]"
+                                 else:
+                                     display_summary += f"\n\n[italic]{content_str}[/italic]"
+
+                            console.print(Panel(display_summary, title="System Output", border_style="white"))
+                            log_content.append(f"\n> **System/Tool Output**:\n> {content_str}\n")
+
+                    # Handle Approval Request
+                    elif key == "approval_wait":
+                        console.print(Panel("[bold red]PERHATIAN: Agen ingin melakukan serangan agresif![/bold red]", border_style="red"))
+                        console.print("Rencana serangan telah diajukan di atas. Apakah Anda mengizinkan?")
+
+                        if Confirm.ask("Izinkan Serangan?", default=False):
+                            user_msg = "User Approved. Lanjutkan dengan serangan."
+                            console.print("[green]Izin diberikan. Melanjutkan...[/green]")
+                        else:
+                            user_msg = "User Denied. JANGAN lakukan serangan itu. Cari cara lain atau berhenti."
+                            console.print("[red]Izin ditolak.[/red]")
+
+                        # Update state with user decision
+                        # We need to append this message to the history and RESTART the loop (continue graph)
+                        # Since the graph returned END (via edge approval_wait->END), we just run graph.astream again with updated history.
+                        # Wait, we need to extract the FULL history from the last event to continue properly.
+                        # LangGraph 'astream' yields partial updates. We need the full state?
+                        # Actually 'value' is the node output, which is a list of messages.
+                        # We should maintain the full conversation list manually or rely on Checkpointer (not used here).
+                        # Simple hack: We are not using a checkpointer, so we can't resume exactly.
+                        # BUT, we are passing 'current_state' which is the input.
+                        # We need to accumulate messages.
+                        pass # Logic handled below loop
+
+            # Check if we finished due to approval wait or actual finish
+            # Since we don't have persistence, we must accumulate the messages we saw.
+            # However, 'astream' yields node outputs.
+            # Let's fix the loop logic.
+            # We need to rebuild the message history from the yielded events to pass back in?
+            # Or better: Use 'invoke' which returns final state, but we want streaming.
+
+            # Since LangGraph without persistence is stateless between calls,
+            # we must manually collect messages from the output events and feed them back.
+            # This is complex in this simple script.
+
+            # Alternate approach: The 'graph' object is compiled.
+            # If we don't use checkpointer, we can't pause/resume easily without managing state manually.
+            # Given the constraints, let's assume the user interaction happens INSIDE a tool/node?
+            # No, `input()` blocks async loop?
+            # Let's use the manual state accumulation strategy.
+
+            # However, the previous code just did `async for event in graph.astream(initial_input):`.
+            # If the graph hits END, the loop finishes.
+            # If 'approval_wait' returns END, the loop finishes.
+            # So we check if the last message requires approval.
+
+            # We need to capture the accumulated messages.
+            # Let's verify how we can get the final state from astream.
+            # Usually we can't. We should use `graph.stream` (sync) or just manage a list.
+
+            # Simplified Logic:
+            # We will use a `messages` list variable.
+            # initial_input has 'messages'.
+            # Every time a node yields, we append to `messages`.
+            # If we hit Approval Node, we ask user, append response to `messages`, and Loop again.
+
+            # But wait, `astream` input expects the full state if we are restarting.
+
+            # Let's refactor the loop logic entirely.
+
+            break # Break the dummy loop to rewrite it below.
+
+        # --- REFACTORED LOOP FOR HUMAN-IN-THE-LOOP ---
+
+        messages = initial_input["messages"]
+        while True:
+            # Create a new graph run with current history
+            current_inputs = {"messages": messages}
+
+            # We track if we hit the approval node in this run
+            hit_approval = False
+
+            async for event in graph.astream(current_inputs):
+                for key, value in event.items():
+                    # value is {"messages": [Msg]}
+                    new_msgs = value.get("messages", [])
+
+                    # Append to our local history so we can resume later
+                    # Note: LangGraph add_messages logic handles IDs, here we just append.
+                    messages.extend(new_msgs)
+
+                    # Log/Print logic (same as before)
+                    if key == "reasoner":
+                        msg = new_msgs[-1]
+                        content = msg.content
+                        if content:
+                            reasoning_match = re.search(r'<reasoning>(.*?)</reasoning>', content, re.DOTALL)
+                            reasoning_text = reasoning_match.group(1).strip() if reasoning_match else ""
+                            clean_content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL).strip()
+
+                            if reasoning_text:
+                                console.print(Panel(Markdown(reasoning_text), title="[bold blue]DeepSeek Reasoner[/bold blue]", border_style="blue", title_align="left"))
+                                log_content.append(f"\n### Reasoning\n{reasoning_text}\n")
+                            if clean_content:
+                                console.print(Panel(Markdown(clean_content), title="[bold green]DeepSeek Action[/bold green]", border_style="green", title_align="left"))
+                                log_content.append(f"\n### Action\n{clean_content}\n")
+
+                    elif key == "executor":
+                        for m in new_msgs:
+                            content_str = str(m.content)
+                            display_summary = f"[dim]Tool Output ({len(content_str)} chars)[/dim]"
+                            if "**HASIL ALAT" in content_str:
+                                 tool_header = content_str.split('\n')[0]
+                                 display_summary = f"[bold magenta]{tool_header}[/bold magenta]"
+                            console.print(Panel(display_summary, title="System Output", border_style="white"))
+                            log_content.append(f"\n> **Tool Output**:\n> {content_str}\n")
+
+                    elif key == "approval_wait":
+                        hit_approval = True
+                        console.print(Panel("[bold red]PERHATIAN: Persetujuan Diperlukan![/bold red]", border_style="red"))
+
+            # End of stream (Graph hit END or paused)
+
+            if hit_approval:
+                # Ask user
+                if Confirm.ask("Izinkan DeepSeek mengeksekusi rencana serangan?", default=False):
+                    messages.append(HumanMessage(content="User Approved. Lanjutkan."))
+                    console.print("[green]Melanjutkan...[/green]")
+                else:
+                    messages.append(HumanMessage(content="User Denied. JANGAN lakukan. Ganti strategi."))
+                    console.print("[red]Ditolak. Melanjutkan...[/red]")
+                # Continue the outer 'while True' loop to rerun graph with new history
+                continue
+
+            # If we didn't hit approval, and the stream ended, we are done.
+            break
+
 
         # Save Log
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

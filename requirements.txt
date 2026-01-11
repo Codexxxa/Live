@@ -55,3 +55,4 @@ zstandard==0.25.0
 wafw00f
 crawl4ai
 beautifulsoup4
+playwright==1.55.0

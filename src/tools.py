@@ -7,7 +7,8 @@ from bs4 import BeautifulSoup, Comment
 from langchain_core.tools import tool
 from typing import Optional, Dict, Any, List
 from src.proxy_manager import ProxyManager
-from crawl4ai import AsyncWebCrawler
+from src.attack_tools import check_sqli, check_xss
+from playwright.async_api import async_playwright
 
 proxy_manager = ProxyManager()
 
@@ -45,12 +46,15 @@ def analyze_headers(url: str) -> Dict[str, Any]:
 def fetch_page_content(url: str) -> str:
     """
     Downloads the HTML source code of the page for analysis.
-    Useful for finding hidden comments, version info, or sensitive data in source.
+    Returns truncated content (max 5000 chars) to save tokens.
     """
     proxy = proxy_manager.get_random_proxy()
     try:
         response = requests.get(url, proxies=proxy, timeout=15)
-        return response.text[:10000] # Return first 10k chars to avoid token limit issues
+        text = response.text
+        if len(text) > 5000:
+            return text[:5000] + "\n...[Content Truncated. Use scan_attack_surface for detailed element analysis]..."
+        return text
     except Exception as e:
         return f"Error fetching page: {str(e)}"
 
@@ -84,7 +88,7 @@ def identify_waf(url: str) -> str:
 def send_custom_request(url: str, method: str = "GET", data: Optional[Dict] = None, headers: Optional[Dict] = None) -> str:
     """
     Sends a custom HTTP request to the target.
-    Useful for testing SQL Injection payloads, XSS, or other specific exploits.
+    Useful for manual verification of exploits if needed.
     """
     proxy = proxy_manager.get_random_proxy()
     try:
@@ -101,85 +105,123 @@ def send_custom_request(url: str, method: str = "GET", data: Optional[Dict] = No
         return f"Error sending request: {str(e)}"
 
 @tool
-def crawl_website(url: str) -> str:
+def scan_attack_surface(url: str) -> str:
     """
-    Crawls the website using a headless browser to get dynamic content.
-    Returns Markdown-formatted text of the page content.
-    Useful for SPA (Single Page Applications) or sites heavily using JavaScript.
-    """
-    async def run_crawl():
-        # TODO: Integrate proxy usage for crawl4ai if supported/needed
-        # For now, we assume crawl4ai uses system environment or direct connection
-        # To add proxy: AsyncWebCrawler(proxy=...) if supported
+    [HIGH PRIORITY] Scans the page for interactive elements that could be attack vectors.
+    Returns a structured JSON summary of:
+    - Input Forms (action, method, fields)
+    - URL Parameters
+    - Cookies
+    - API Endpoints (guessed from scripts)
 
-        async with AsyncWebCrawler(verbose=True) as crawler:
-            result = await crawler.arun(url=url)
-            return result.markdown
-
-    try:
-        # Check if we are in an existing loop
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If we are in a running loop (which we are, in main.py),
-            # we cannot use run_until_complete directly if this function is called synchronously.
-            # However, this tool is wrapped by LangChain.
-            # If the executor node is sync, this will fail.
-            # We will refactor the executor node to be async.
-            # For now, returning a coroutine might be expected if the node is async.
-            return run_crawl()
-    except RuntimeError:
-        # If no loop is running, we can use asyncio.run
-        return asyncio.run(run_crawl())
-
-    # Fallback/Safe path for sync execution context if needed
-    # But since we will update the executor to be async, we return the coroutine?
-    # Actually, the tool_executor_node will await it if it detects a coroutine.
-    return run_crawl()
-
-@tool
-def analyze_critical_elements(url: str) -> str:
-    """
-    Analyzes the page to extract ONLY critical elements for security testing:
-    - Forms and Inputs
-    - Scripts (src or inline)
-    - Comments
-    - Meta tags
-
-    Reduces noise compared to full HTML fetch.
+    Use this instead of reading full HTML to save context.
     """
     proxy = proxy_manager.get_random_proxy()
     try:
         response = requests.get(url, proxies=proxy, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        report = []
+        surface = {
+            "url": url,
+            "forms": [],
+            "links_with_params": [],
+            "cookies": list(response.cookies.keys()),
+            "potential_api_endpoints": []
+        }
 
         # 1. Forms
         forms = soup.find_all('form')
-        report.append(f"Found {len(forms)} forms:")
-        for i, form in enumerate(forms):
-            action = form.get('action', 'N/A')
-            method = form.get('method', 'GET')
-            inputs = form.find_all(['input', 'textarea', 'select'])
-            input_names = [inp.get('name', 'unnamed') for inp in inputs]
-            report.append(f"  Form #{i+1}: action='{action}' method='{method}' inputs={input_names}")
+        for form in forms:
+            form_data = {
+                "action": form.get('action', ''),
+                "method": form.get('method', 'GET').upper(),
+                "inputs": []
+            }
+            for inp in form.find_all(['input', 'textarea', 'select']):
+                inp_data = {
+                    "name": inp.get('name'),
+                    "type": inp.get('type', 'text'),
+                    "id": inp.get('id')
+                }
+                if inp_data["name"]: # Only list inputs with names
+                    form_data["inputs"].append(inp_data)
+            surface["forms"].append(form_data)
 
-        # 2. Scripts
-        scripts = soup.find_all('script')
-        src_scripts = [s.get('src') for s in scripts if s.get('src')]
-        report.append(f"\nExternal Scripts ({len(src_scripts)}):")
-        for src in src_scripts:
-            report.append(f"  - {src}")
+        # 2. Links with Params
+        links = soup.find_all('a', href=True)
+        for link in links:
+            href = link['href']
+            if '?' in href:
+                surface["links_with_params"].append(href)
 
-        # 3. Comments
-        comments = soup.find_all(string=lambda text: isinstance(text, Comment))
-        report.append(f"\nComments ({len(comments)}):")
-        for c in comments:
-            s = str(c).strip()
-            if len(s) > 0:
-                report.append(f"  - <!-- {s[:100]}... -->")
+        # 3. Scripts (Heuristic for APIs)
+        scripts = soup.find_all('script', src=True)
+        for s in scripts:
+            src = s['src']
+            if "api" in src or "v1" in src:
+                surface["potential_api_endpoints"].append(src)
 
-        return "\n".join(report)
+        return json.dumps(surface, indent=2)
 
     except Exception as e:
-        return f"Error analyzing elements: {str(e)}"
+        return f"Error scanning attack surface: {str(e)}"
+
+@tool
+async def render_page(url: str) -> str:
+    """
+    Renders the page using a headless browser (Playwright).
+    Use this if the site is a Single Page Application (SPA) or loads content via JS.
+    """
+    try:
+        async with async_playwright() as p:
+            # Launch browser (Chromium)
+            browser = await p.chromium.launch(headless=True)
+
+            # Context with basic strict settings to avoid detection/blocks if possible
+            # Note: We can add proxy here if needed, but keeping it simple for now
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            )
+
+            page = await context.new_page()
+
+            try:
+                await page.goto(url, timeout=30000, wait_until="networkidle")
+            except Exception:
+                # If networkidle fails, try domcontentloaded
+                await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+
+            content = await page.content()
+            await browser.close()
+
+            # Simple summarization for context saving
+            if len(content) > 10000:
+                return content[:5000] + "\n...[Truncated]..."
+            return content
+
+    except Exception as e:
+        return f"Error rendering page with Playwright: {str(e)}"
+
+@tool
+def exploit_sqli(url: str, params: Optional[Dict[str, Any]] = None) -> str:
+    """
+    [OFFENSIVE] Tests for SQL Injection vulnerabilities.
+    REQUIRES APPROVAL.
+    """
+    proxy = proxy_manager.get_random_proxy()
+    return check_sqli(url, params, proxies=proxy)
+
+@tool
+def exploit_xss(url: str, params: Optional[Dict[str, Any]] = None) -> str:
+    """
+    [OFFENSIVE] Tests for Reflected XSS vulnerabilities.
+    REQUIRES APPROVAL.
+    """
+    proxy = proxy_manager.get_random_proxy()
+    return check_xss(url, params, proxies=proxy)
+
+# Deprecated/Wrapper for legacy support if needed, but we rely on the above tools now
+@tool
+def crawl_website(url: str) -> str:
+    """Deprecated. Use render_page instead."""
+    return "Please use 'render_page' tool."
