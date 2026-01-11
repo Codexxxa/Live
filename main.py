@@ -135,7 +135,7 @@ async def run_scan_interface():
             # We track if we hit the approval node in this run
             hit_approval = False
 
-            async for event in graph.astream(current_inputs):
+            async for event in graph.astream(current_inputs, config={"recursion_limit": 150}):
                 for key, value in event.items():
                     # Check if value is None (e.g. entry_node returning empty dict)
                     if not value:
