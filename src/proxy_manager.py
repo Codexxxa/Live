@@ -54,3 +54,26 @@ class ProxyManager:
         if proxy_dict:
             return proxy_dict["http"]
         return None
+
+    def get_playwright_proxy(self) -> Optional[Dict[str, str]]:
+        """
+        Returns a random proxy in Playwright format.
+        Format: { "server": "http://ip:port", "username": "user", "password": "pass" }
+        """
+        if not self.proxies:
+            self.fetch_proxies()
+
+        if not self.proxies:
+            return None
+
+        proxy_data = random.choice(self.proxies)
+
+        # Webshare proxies are typically HTTP/HTTPS.
+        # We construct the server URL without auth, and pass auth separately.
+        server_url = f"http://{proxy_data['proxy_address']}:{proxy_data['port']}"
+
+        return {
+            "server": server_url,
+            "username": proxy_data['username'],
+            "password": proxy_data['password']
+        }

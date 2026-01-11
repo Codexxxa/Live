@@ -3,6 +3,17 @@ import time
 from typing import List, Dict, Any, Tuple, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
+# Default Headers to look like a real browser (Same as in tools.py)
+# We duplicate it here to avoid circular imports or complex dependency injection for now.
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1"
+}
+
 def check_sqli(url: str, params: Dict[str, Any] = None, proxies: Optional[Dict[str, str]] = None) -> str:
     """
     Performs a basic check for SQL Injection vulnerabilities on GET parameters.
@@ -43,7 +54,7 @@ def check_sqli(url: str, params: Dict[str, Any] = None, proxies: Optional[Dict[s
     vulnerable = False
 
     try:
-        base_response = requests.get(url, timeout=10, proxies=proxies)
+        base_response = requests.get(url, timeout=10, proxies=proxies, headers=DEFAULT_HEADERS)
         base_len = len(base_response.text)
     except Exception as e:
          return f"Error connecting to target: {e}"
@@ -65,7 +76,7 @@ def check_sqli(url: str, params: Dict[str, Any] = None, proxies: Optional[Dict[s
 
             try:
                 # Send Request
-                resp = requests.get(test_url, timeout=10, proxies=proxies)
+                resp = requests.get(test_url, timeout=10, proxies=proxies, headers=DEFAULT_HEADERS)
 
                 # Check for Error Reflection
                 found_error = any(p in resp.text for p in error_patterns)
@@ -120,7 +131,7 @@ def check_xss(url: str, params: Dict[str, Any] = None, proxies: Optional[Dict[st
             test_url = urlunparse(url_parts)
 
             try:
-                resp = requests.get(test_url, timeout=10, proxies=proxies)
+                resp = requests.get(test_url, timeout=10, proxies=proxies, headers=DEFAULT_HEADERS)
 
                 # Check Reflection
                 if payload in resp.text:

@@ -12,6 +12,20 @@ from playwright.async_api import async_playwright
 
 proxy_manager = ProxyManager()
 
+# Default Headers to look like a real browser (Chrome on Windows)
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1"
+}
+
 @tool
 def analyze_headers(url: str) -> Dict[str, Any]:
     """
@@ -20,7 +34,7 @@ def analyze_headers(url: str) -> Dict[str, Any]:
     """
     proxy = proxy_manager.get_random_proxy()
     try:
-        response = requests.head(url, proxies=proxy, timeout=10, allow_redirects=True)
+        response = requests.head(url, headers=DEFAULT_HEADERS, proxies=proxy, timeout=10, allow_redirects=True)
         headers = dict(response.headers)
 
         security_headers = [
@@ -50,7 +64,7 @@ def fetch_page_content(url: str) -> str:
     """
     proxy = proxy_manager.get_random_proxy()
     try:
-        response = requests.get(url, proxies=proxy, timeout=15)
+        response = requests.get(url, headers=DEFAULT_HEADERS, proxies=proxy, timeout=15)
         text = response.text
         if len(text) > 5000:
             return text[:5000] + "\n...[Content Truncated. Use scan_attack_surface for detailed element analysis]..."
@@ -70,6 +84,10 @@ def identify_waf(url: str) -> str:
 
     proxy_str = proxy_manager.get_proxy_string()
 
+    # wafw00f handles its own headers usually, but we can't easily inject them via CLI args
+    # except via -H (but that's tedious).
+    # Usually wafw00f is good enough, but if it fails we might need to look at custom implementation.
+    # For now, we just pass the proxy.
     cmd = [wafw00f_path, url, "--output", "-"]
     if proxy_str:
         cmd.extend(["--proxy", proxy_str])
@@ -91,12 +109,18 @@ def send_custom_request(url: str, method: str = "GET", data: Optional[Dict] = No
     Useful for manual verification of exploits if needed.
     """
     proxy = proxy_manager.get_random_proxy()
+
+    # Merge default headers with custom headers
+    req_headers = DEFAULT_HEADERS.copy()
+    if headers:
+        req_headers.update(headers)
+
     try:
         response = requests.request(
             method=method,
             url=url,
             data=data,
-            headers=headers,
+            headers=req_headers,
             proxies=proxy,
             timeout=10
         )
@@ -118,7 +142,7 @@ def scan_attack_surface(url: str) -> str:
     """
     proxy = proxy_manager.get_random_proxy()
     try:
-        response = requests.get(url, proxies=proxy, timeout=15)
+        response = requests.get(url, headers=DEFAULT_HEADERS, proxies=proxy, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
 
         surface = {
@@ -172,24 +196,45 @@ async def render_page(url: str) -> str:
     Renders the page using a headless browser (Playwright).
     Use this if the site is a Single Page Application (SPA) or loads content via JS.
     """
+    playwright_proxy = proxy_manager.get_playwright_proxy()
+
     try:
         async with async_playwright() as p:
             # Launch browser (Chromium)
+            # We don't pass proxy here if we want to set it per context,
+            # but setting it here is also fine. Let's stick to context level for flexibility.
             browser = await p.chromium.launch(headless=True)
 
             # Context with basic strict settings to avoid detection/blocks if possible
-            # Note: We can add proxy here if needed, but keeping it simple for now
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-            )
+            # Now we inject the proxy!
+            context_options = {
+                "user_agent": DEFAULT_HEADERS["User-Agent"],
+                "viewport": {"width": 1280, "height": 720},
+                "ignore_https_errors": True # Often needed for proxies or test sites
+            }
+
+            if playwright_proxy:
+                context_options["proxy"] = playwright_proxy
+
+            context = await browser.new_context(**context_options)
 
             page = await context.new_page()
 
+            # Add extra headers to be sure
+            await page.set_extra_http_headers({
+                "Accept-Language": "en-US,en;q=0.9",
+                "Upgrade-Insecure-Requests": "1"
+            })
+
             try:
-                await page.goto(url, timeout=30000, wait_until="networkidle")
+                await page.goto(url, timeout=45000, wait_until="networkidle")
             except Exception:
                 # If networkidle fails, try domcontentloaded
-                await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                try:
+                    await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                except Exception as e:
+                    await browser.close()
+                    return f"Error loading page (timeout/net): {str(e)}"
 
             content = await page.content()
             await browser.close()
