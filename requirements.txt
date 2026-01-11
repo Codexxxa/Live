@@ -55,3 +55,9 @@ zstandard==0.25.0
 wafw00f
 beautifulsoup4
 playwright==1.55.0
+playwright-stealth
+arjun
+wapiti3
+wfuzz
+pwntools
+trufflehog3

@@ -9,6 +9,10 @@ from typing import Optional, Dict, Any, List
 from src.proxy_manager import ProxyManager
 from src.attack_tools import check_sqli, check_xss
 from playwright.async_api import async_playwright
+try:
+    from playwright_stealth import stealth_async
+except ImportError:
+    stealth_async = None
 
 proxy_manager = ProxyManager()
 
@@ -83,11 +87,6 @@ def identify_waf(url: str) -> str:
         return "Error: wafw00f tool not found in path."
 
     proxy_str = proxy_manager.get_proxy_string()
-
-    # wafw00f handles its own headers usually, but we can't easily inject them via CLI args
-    # except via -H (but that's tedious).
-    # Usually wafw00f is good enough, but if it fails we might need to look at custom implementation.
-    # For now, we just pass the proxy.
     cmd = [wafw00f_path, url, "--output", "-"]
     if proxy_str:
         cmd.extend(["--proxy", proxy_str])
@@ -131,14 +130,14 @@ def send_custom_request(url: str, method: str = "GET", data: Optional[Dict] = No
 @tool
 def scan_attack_surface(url: str) -> str:
     """
-    [HIGH PRIORITY] Scans the page for interactive elements that could be attack vectors.
+    [HIGH PRIORITY] Scans the page for interactive elements (Visible Attack Surface).
     Returns a structured JSON summary of:
     - Input Forms (action, method, fields)
     - URL Parameters
     - Cookies
     - API Endpoints (guessed from scripts)
 
-    Use this instead of reading full HTML to save context.
+    NOTE: For hidden parameters, consider using 'run_arjun'.
     """
     proxy = proxy_manager.get_random_proxy()
     try:
@@ -193,24 +192,19 @@ def scan_attack_surface(url: str) -> str:
 @tool
 async def render_page(url: str) -> str:
     """
-    Renders the page using a headless browser (Playwright).
+    Renders the page using a headless browser (Playwright) WITH STEALTH.
     Use this if the site is a Single Page Application (SPA) or loads content via JS.
     """
     playwright_proxy = proxy_manager.get_playwright_proxy()
 
     try:
         async with async_playwright() as p:
-            # Launch browser (Chromium)
-            # We don't pass proxy here if we want to set it per context,
-            # but setting it here is also fine. Let's stick to context level for flexibility.
             browser = await p.chromium.launch(headless=True)
 
-            # Context with basic strict settings to avoid detection/blocks if possible
-            # Now we inject the proxy!
             context_options = {
                 "user_agent": DEFAULT_HEADERS["User-Agent"],
                 "viewport": {"width": 1280, "height": 720},
-                "ignore_https_errors": True # Often needed for proxies or test sites
+                "ignore_https_errors": True
             }
 
             if playwright_proxy:
@@ -220,7 +214,11 @@ async def render_page(url: str) -> str:
 
             page = await context.new_page()
 
-            # Add extra headers to be sure
+            # Apply stealth if available
+            if stealth_async:
+                await stealth_async(page)
+
+            # Add extra headers
             await page.set_extra_http_headers({
                 "Accept-Language": "en-US,en;q=0.9",
                 "Upgrade-Insecure-Requests": "1"
@@ -229,7 +227,6 @@ async def render_page(url: str) -> str:
             try:
                 await page.goto(url, timeout=45000, wait_until="networkidle")
             except Exception:
-                # If networkidle fails, try domcontentloaded
                 try:
                     await page.goto(url, timeout=30000, wait_until="domcontentloaded")
                 except Exception as e:
@@ -239,13 +236,58 @@ async def render_page(url: str) -> str:
             content = await page.content()
             await browser.close()
 
-            # Simple summarization for context saving
             if len(content) > 10000:
                 return content[:5000] + "\n...[Truncated]..."
             return content
 
     except Exception as e:
         return f"Error rendering page with Playwright: {str(e)}"
+
+@tool
+def enumerate_subdomains(domain_or_url: str) -> str:
+    """
+    [RECON] Enumerates subdomains using public Certificate Transparency (CT) logs.
+    Passive scan (no direct packet sending to target).
+    """
+    # Extract domain
+    from urllib.parse import urlparse
+    if "http" in domain_or_url:
+        parsed = urlparse(domain_or_url)
+        domain = parsed.netloc
+    else:
+        domain = domain_or_url
+
+    # Remove port
+    if ":" in domain:
+        domain = domain.split(":")[0]
+
+    # Use crt.sh via requests
+    try:
+        url = f"https://crt.sh/?q=%.{domain}&output=json"
+        resp = requests.get(url, timeout=20)
+
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+                subdomains = set()
+                for entry in data:
+                    name_value = entry.get("name_value", "")
+                    for sub in name_value.split("\n"):
+                        subdomains.add(sub)
+
+                # Format output
+                sorted_subs = sorted(list(subdomains))
+                if not sorted_subs:
+                    return f"No subdomains found for {domain} on crt.sh."
+
+                return f"Subdomains found for {domain} (Passive):\n" + "\n".join(sorted_subs[:50]) + ("\n... (truncated)" if len(sorted_subs)>50 else "")
+            except Exception:
+                return "Error parsing crt.sh JSON."
+        else:
+             return f"Error fetching subdomains from crt.sh: Status {resp.status_code}"
+
+    except Exception as e:
+        return f"Error enumerating subdomains: {str(e)}"
 
 @tool
 def exploit_sqli(url: str, params: Optional[Dict[str, Any]] = None) -> str:
@@ -264,9 +306,3 @@ def exploit_xss(url: str, params: Optional[Dict[str, Any]] = None) -> str:
     """
     proxy = proxy_manager.get_random_proxy()
     return check_xss(url, params, proxies=proxy)
-
-# Deprecated/Wrapper for legacy support if needed, but we rely on the above tools now
-@tool
-def crawl_website(url: str) -> str:
-    """Deprecated. Use render_page instead."""
-    return "Please use 'render_page' tool."

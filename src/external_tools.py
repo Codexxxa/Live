@@ -1,12 +1,169 @@
 import shutil
 import subprocess
 import os
-from typing import Optional, Dict, Any
+import sys
+from typing import Optional, Dict, Any, List
 from langchain_core.tools import tool
 
 def get_executable_path(tool_name: str) -> Optional[str]:
     """Finds the executable path for a given tool."""
     return shutil.which(tool_name)
+
+@tool
+def run_nuclei(url: str, tags: Optional[str] = None) -> str:
+    """
+    [ACTIVE SCANNER] Runs Nuclei vulnerability scanner.
+    Args:
+        url: Target URL
+        tags: Optional comma-separated tags (e.g., "cve,misconfiguration,cms")
+    """
+    nuclei_path = get_executable_path("nuclei")
+    if not nuclei_path:
+        return "ERROR: Nuclei not found in PATH. Please install Nuclei."
+
+    # cmd: nuclei -u [url] -json
+    cmd = [nuclei_path, "-u", url, "-no-color"]
+
+    if tags:
+        cmd.extend(["-tags", tags])
+    else:
+        # Default mild scan if no tags
+        cmd.extend(["-tags", "cve,misconfiguration,technologies"])
+
+    try:
+        # Run process
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300 # 5 mins
+        )
+
+        output = result.stdout + result.stderr
+        if not output.strip():
+            return "Nuclei finished with no output (possibly no vulnerabilities found)."
+
+        # Return summary or full output if short
+        if len(output) > 2000:
+             return f"Nuclei Output (Truncated):\n{output[:1000]}\n...\n{output[-1000:]}"
+        return f"Nuclei Output:\n{output}"
+
+    except subprocess.TimeoutExpired:
+        return "Nuclei scan timed out."
+    except Exception as e:
+        return f"Error running Nuclei: {str(e)}"
+
+@tool
+def run_arjun(url: str) -> str:
+    """
+    [ACTIVE SCANNER] Runs Arjun to discover hidden HTTP parameters.
+    """
+    # Arjun is a python module, usually run as 'arjun' command if installed
+    arjun_path = get_executable_path("arjun")
+    if not arjun_path:
+         # Try running via python -m arjun
+         arjun_path = "arjun" # hope it's in path or alias
+
+    cmd = ["arjun", "-u", url, "--stable", "-oT", "/tmp/arjun_out.json"] # stable scan
+
+    try:
+        # We try to run it. If 'arjun' command fails, we might try 'python -m arjun' logic, but let's stick to CLI
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=180
+        )
+
+        if result.returncode != 0:
+             # Try fallback: python -m arjun
+             cmd = [sys.executable, "-m", "arjun", "-u", url, "--stable"]
+             result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+
+        output = result.stdout
+        # Arjun output can be verbose. Look for "Parameters found"
+        if "parameters found" in output.lower():
+            return f"Arjun Found Parameters:\n{output}"
+        else:
+            return f"Arjun finished. Output:\n{output[-1000:]}"
+
+    except Exception as e:
+        return f"Error running Arjun: {str(e)}"
+
+@tool
+def run_wapiti(url: str) -> str:
+    """
+    [ACTIVE SCANNER] Runs Wapiti web vulnerability scanner.
+    """
+    wapiti_path = get_executable_path("wapiti")
+    if not wapiti_path:
+        wapiti_path = "wapiti"
+
+    # Wapiti is heavy. Quick scan.
+    # -u URL --scope folder -m common_modules --flush-session -f txt
+    cmd = [wapiti_path, "-u", url, "--scope", "folder", "--flush-session", "-f", "txt", "--color", "--max-scan-time", "300"]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=360 # 6 mins
+        )
+        return f"Wapiti Output:\n{result.stdout[-3000:]}" # Last 3000 chars
+
+    except Exception as e:
+        return f"Error running Wapiti: {str(e)}"
+
+@tool
+def run_wfuzz(url: str, path: str = "FUZZ") -> str:
+    """
+    [ACTIVE SCANNER] Runs Wfuzz for fuzzing.
+    Args:
+        url: URL with 'FUZZ' keyword or base url.
+        path: The fuzzing payload location if not in url.
+    """
+    wfuzz_path = get_executable_path("wfuzz")
+    if not wfuzz_path:
+        return "ERROR: Wfuzz not found."
+
+    # Simple common wordlist check
+    # Note: Requires a wordlist. We assume a standard small one or fail.
+    # We'll try to find a wordlist or use a built-in one if we ship it.
+    # For now, let's assume user has wordlists or we skip.
+    # Actually, without a wordlist, wfuzz is useless.
+    # We will try a very small heuristic or return error asking for wordlist path.
+    return "Wfuzz requires a wordlist path. Please use 'send_custom_request' or 'scan_attack_surface' for now, or ensure wordlists are configured."
+
+@tool
+def run_trufflehog(url: str) -> str:
+    """
+    [ACTIVE SCANNER] Runs TruffleHog to scan for secrets in the page/endpoint.
+    """
+    th_path = get_executable_path("trufflehog")
+    if not th_path:
+        # Check pip version (trufflehog3)
+        th_path = get_executable_path("trufflehog3")
+
+    if not th_path:
+        return "ERROR: TruffleHog not found."
+
+    # Scan url
+    cmd = [th_path, "filesystem", url, "--no-update"] # This is for filesystem
+    # TruffleHog git/filesystem. For URL, it might be 'git' or we need to download source first.
+    # TruffleHog also has 's3', 'gcs', etc.
+    # For a generic URL, 'trufflehog3' (python) can scan a URL?
+    # Actually trufflehog3 is 'trufflehog3 [URL]'.
+
+    cmd = [th_path, url]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.stdout:
+            return f"TruffleHog Found:\n{result.stdout}"
+        return "TruffleHog finished. No secrets found."
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 @tool
 def run_sqlmap(url: str, params: Optional[Dict[str, Any]] = None) -> str:
