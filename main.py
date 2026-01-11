@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+import re
 from datetime import datetime
 from rich.console import Console
 from rich.prompt import Prompt, Confirm
@@ -124,20 +125,47 @@ async def run_scan_interface():
                 if key == "reasoner":
                     msg = value["messages"][-1]
                     content = msg.content
+
                     if content:
-                        console.print(Panel(Markdown(content), title="DeepSeek Reasoner", border_style="blue"))
-                        log_content.append(f"\n## Analisis AI\n\n{content}")
+                        # Split reasoning and actual content
+                        reasoning_match = re.search(r'<reasoning>(.*?)</reasoning>', content, re.DOTALL)
+                        reasoning_text = reasoning_match.group(1).strip() if reasoning_match else ""
+
+                        clean_content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL).strip()
+
+                        # Display Reasoning
+                        if reasoning_text:
+                            console.print(Panel(Markdown(reasoning_text), title="[bold blue]DeepSeek Reasoner (Thinking Process)[/bold blue]", border_style="blue", title_align="left"))
+                            log_content.append(f"\n### Reasoning Process\n{reasoning_text}\n")
+
+                        # Display Action/JSON
+                        if clean_content:
+                            console.print(Panel(Markdown(clean_content), title="[bold green]DeepSeek Action[/bold green]", border_style="green", title_align="left"))
+                            log_content.append(f"\n### Action Decision\n{clean_content}\n")
 
                 # Handle Tool Executor Output
                 elif key == "executor":
                     # The executor node returns a HumanMessage with the tool output
                     messages = value["messages"]
                     for m in messages:
-                        # Extract tool name from content if possible, or just print content
                         content_str = str(m.content)
-                        preview = content_str[:200] + "..." if len(content_str) > 200 else content_str
 
-                        console.print(f"[dim italic]System/Tool Output: {preview}[/dim italic]")
+                        # Create a summary for display
+                        display_summary = f"[dim]Tool execution completed. Output length: {len(content_str)} chars.[/dim]"
+                        if "**HASIL ALAT" in content_str:
+                             # Extract tool name
+                             tool_header = content_str.split('\n')[0]
+                             display_summary = f"[bold magenta]{tool_header}[/bold magenta]\n[dim]Output truncated for readability. See logs for full details.[/dim]"
+
+                             # Maybe show a small preview if it's text
+                             preview_lines = content_str.split('\n')
+                             if len(preview_lines) > 5:
+                                 preview = "\n".join(preview_lines[:5]) + "\n..."
+                                 display_summary += f"\n\n[italic]{preview}[/italic]"
+                             else:
+                                 display_summary += f"\n\n[italic]{content_str}[/italic]"
+
+                        console.print(Panel(display_summary, title="System Output", border_style="white"))
                         log_content.append(f"\n> **System/Tool Output**:\n> {content_str}\n")
 
         # Save Log
@@ -157,6 +185,8 @@ async def run_scan_interface():
 
     except Exception as e:
         console.print(f"[bold red]Terjadi Kesalahan: {e}[/bold red]")
+        import traceback
+        traceback.print_exc()
         Prompt.ask("Tekan Enter untuk kembali...")
 
 def main_menu():

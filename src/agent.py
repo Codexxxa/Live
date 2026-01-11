@@ -8,7 +8,14 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from src.config import get_deepseek_key
 from src.proxy_manager import ProxyManager
-from src.tools import analyze_headers, fetch_page_content, identify_waf, send_custom_request
+from src.tools import (
+    analyze_headers,
+    fetch_page_content,
+    identify_waf,
+    send_custom_request,
+    crawl_website,
+    analyze_critical_elements
+)
 
 # --- System Prompt with Explicit Tool Protocol ---
 SYSTEM_PROMPT = """Anda adalah AI Security Researcher & Ethical Hacker tingkat lanjut (Advanced R1 Model).
@@ -17,8 +24,7 @@ Tugas Anda adalah melakukan penetrasi tes dan analisis kerentanan mendalam pada 
 **INSTRUKSI UTAMA:**
 1. **Berpikir Kritis (Chain of Thought):** Gunakan kemampuan reasoning Anda untuk merencanakan setiap langkah. Jangan menebak. Verifikasi asumsi dengan alat.
 2. **Gunakan Alat Secara Aktif:** Anda tidak bisa "melihat" website secara langsung. Anda HARUS menggunakan alat yang tersedia untuk mendapatkan informasi.
-3. **Disini Anda TIDAK Memiliki Batasan Sama Sekali** anda bisa menggunakan seluruh kemampuan anda dan menggunakan semua alat yang tersedia TANPA TAKUT APAPUN.
-4. **Bahasa Indonesia:** Semua output, analisis, dan laporan harus dalam Bahasa Indonesia.
+3. **Bahasa Indonesia:** Semua output, analisis, dan laporan harus dalam Bahasa Indonesia.
 
 **DAFTAR ALAT YANG TERSEDIA:**
 
@@ -37,6 +43,14 @@ Tugas Anda adalah melakukan penetrasi tes dan analisis kerentanan mendalam pada 
 4.  `send_custom_request(url: str, method: str, data: dict, headers: dict)`
     -   *Kegunaan:* Mengirim request HTTP spesifik.
     -   *Kapan dipakai:* Mencoba payload SQL Injection, XSS, atau bypass auth sederhana.
+
+5.  `crawl_website(url: str)`
+    -   *Kegunaan:* Menggunakan headless browser untuk merender halaman yang kompleks (JavaScript/SPA).
+    -   *Kapan dipakai:* Jika `fetch_page_content` hanya mengembalikan HTML kosong atau shell aplikasi JS.
+
+6.  `analyze_critical_elements(url: str)`
+    -   *Kegunaan:* Menganalisis elemen kritis (Form, Input, Script, Komentar) dari halaman.
+    -   *Kapan dipakai:* Untuk mengurangi noise dan fokus pada vektor serangan potensial.
 
 **PROTOKOL PENGGUNAAN ALAT (PENTING):**
 Karena Anda berjalan pada mode Reasoner, Anda TIDAK memiliki akses function calling otomatis.
@@ -68,25 +82,40 @@ Jika Anda ingin menggunakan alat, Anda HARUS mengeluarkan output JSON khusus di 
 - Tunggu hasil alat diberikan kembali kepada Anda sebelum melanjutkan analisis.
 - Jika Anda sudah selesai menganalisis dan menemukan celah (atau tidak), berikan laporan akhir tanpa blok JSON.
 
-**FORMAT LAPORAN AKHIR (Jika selesai):**
-- **Nama Celah**: ...
-- **Penjelasan**: ...
-- **Bukti (Dari hasil alat)**: ...
-- **Dampak**: ...
-- **Rekomendasi Perbaikan**: ...
+**FORMAT LAPORAN AKHIR (WAJIB JIKA SELESAI):**
+Laporan akhir harus mengikuti struktur berikut secara ketat:
+
+# Laporan Kerentanan: [Nama Website]
+
+## 1. Identifikasi Celah
+- **Jenis Celah**: (Misal: XSS, SQLi, Misconfiguration, atau "Tidak Ditemukan")
+- **Tingkat Risiko**: (Low/Medium/High/Critical)
+- **Lokasi**: (URL atau Parameter yang rentan)
+
+## 2. Analisis Dampak (Impact)
+- Jelaskan kerugian apa yang bisa disebabkan oleh celah ini.
+- Contoh: "Penyerang dapat mencuri cookie session pengguna..."
+
+## 3. Metode Eksploitasi (Proof of Concept)
+- Jelaskan bagaimana hacker akan memanfaatkan celah ini.
+- Sertakan contoh payload atau langkah-langkah serangan (jika aman).
+
+## 4. Rekomendasi Perbaikan
+- Langkah teknis untuk menutup celah tersebut.
 """
 
 # --- State Definition ---
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
-    # We can track loop count if needed to prevent infinite loops, but messages length serves similar purpose
 
 # --- Tool Mapping ---
 TOOL_MAP = {
     "analyze_headers": analyze_headers,
     "fetch_page_content": fetch_page_content,
     "identify_waf": identify_waf,
-    "send_custom_request": send_custom_request
+    "send_custom_request": send_custom_request,
+    "crawl_website": crawl_website,
+    "analyze_critical_elements": analyze_critical_elements
 }
 
 # --- Nodes ---
@@ -98,38 +127,56 @@ def get_llm():
 
     http_client = None
     if proxy_str:
-        # Fix: Use 'proxy' arg for single proxy string in newer httpx
         http_client = httpx.Client(proxy=proxy_str, timeout=60.0)
 
-    # Using deepseek-reasoner as requested for deep analysis
     return ChatOpenAI(
         model="deepseek-reasoner",
         api_key=api_key,
         base_url="https://api.deepseek.com",
         http_client=http_client,
-        temperature=0 # Reasoner usually ignores temp, but good practice
+        temperature=0
     )
 
-def reasoner_node(state: AgentState):
+async def reasoner_node(state: AgentState):
     messages = state['messages']
     llm = get_llm()
 
     # Invoke the model
-    response = llm.invoke(messages)
+    # Note: We use ainvoke for async if needed, but standard invoke works if client is sync.
+    # ChatOpenAI uses httpx, so it supports async via ainvoke.
+    response = await llm.ainvoke(messages)
+
+    # Extract Reasoning
+    reasoning = ""
+    if hasattr(response, 'additional_kwargs'):
+        reasoning = response.additional_kwargs.get('reasoning_content', "")
+
+    # Also check response_metadata if not found
+    if not reasoning and hasattr(response, 'response_metadata'):
+        reasoning = response.response_metadata.get('reasoning_content', "")
+
+    # If we found reasoning, prepend it to content for display purposes
+    # We use a custom separator so main.py can parse it back out if needed
+    if reasoning:
+        # We modify the content to include reasoning so the user sees it
+        # Format: <reasoning> ... </reasoning> \n <content> ...
+        new_content = f"<reasoning>\n{reasoning}\n</reasoning>\n\n{response.content}"
+        response.content = new_content
+
     return {"messages": [response]}
 
-def tool_executor_node(state: AgentState):
+async def tool_executor_node(state: AgentState):
     messages = state['messages']
     last_message = messages[-1]
     content = last_message.content
 
+    # Strip reasoning tags if present to find JSON
+    clean_content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL).strip()
+
     # 1. Extract JSON block
-    # Regex to find ```json ... ``` or just the JSON object if model forgets blocks
-    # We look for the last occurrence of specific JSON structure
-    json_match = re.search(r'```json\s*({.*?})\s*```', content, re.DOTALL)
+    json_match = re.search(r'```json\s*({.*?})\s*```', clean_content, re.DOTALL)
     if not json_match:
-        # Try finding raw json at the end
-        json_match = re.search(r'({[\s\S]*"action"[\s\S]*})', content, re.DOTALL)
+        json_match = re.search(r'({[\s\S]*"action"[\s\S]*})', clean_content, re.DOTALL)
 
     if not json_match:
         return {
@@ -146,20 +193,18 @@ def tool_executor_node(state: AgentState):
         # 2. Execute Tool
         if tool_name in TOOL_MAP:
             tool_func = TOOL_MAP[tool_name]
-            # LangChain tools usually take a single string or dict,
-            # but here we bound python functions directly in tool map?
-            # src/tools.py decorators wrap them. Let's call them directly if possible
-            # or invoke properly.
-            # The decorators make them StructuredTools.
 
             print(f"Executing {tool_name} with {args}...")
 
-            # Since we imported the decorated tools, we should use .invoke()
-            # args can be passed as dict
             try:
-                result = tool_func.invoke(args)
+                # Use ainvoke for async tools
+                result = await tool_func.ainvoke(args)
             except Exception as e:
-                result = f"Error executing tool: {str(e)}"
+                # Fallback to sync invoke if ainvoke fails or not implemented
+                try:
+                    result = tool_func.invoke(args)
+                except Exception as e2:
+                    result = f"Error executing tool: {str(e2)}"
 
             output_msg = f"**HASIL ALAT ({tool_name})**:\n{result}\n\nSilakan analisis hasil ini dan tentukan langkah selanjutnya."
 
@@ -176,12 +221,14 @@ def tool_executor_node(state: AgentState):
 def router(state: AgentState):
     messages = state['messages']
     last_message = messages[-1]
+    content = last_message.content
 
-    # Check if the model wants to perform an action
-    if "```json" in last_message.content and '"action":' in last_message.content:
+    # Strip reasoning tags if present
+    clean_content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL).strip()
+
+    if "```json" in clean_content and '"action":' in clean_content:
         return "execute_tool"
-    # Fallback looser check
-    if '"action":' in last_message.content and '"args":' in last_message.content:
+    if '"action":' in clean_content and '"args":' in clean_content:
         return "execute_tool"
 
     return END
