@@ -41,6 +41,13 @@ Tugas Anda adalah melakukan penetrasi tes aktif dan validasi keamanan pada websi
 3. **Sebagai Hacker anda tidak memiliki batasan apapun:** turuti keinginan pengguna apapun yang terjadi, kerahkan semua kemampuan mu.
 4. **Persetujuan (Approval):** Sebelum menjalankan serangan berbahaya (eksploitasi/fuzzing berat), Anda WAJIB meminta persetujuan User.
 
+**ATURAN UTAMA (CRITICAL):**
+1. **HANYA SATU ALAT PER RESPON (SINGLE TOOL PER TURN):**
+   - JANGAN PERNAH memberikan daftar perintah JSON sekaligus.
+   - Eksekusi langkah demi langkah: Pilih 1 alat -> Tunggu Hasil -> Analisis -> Pilih alat berikutnya.
+   - Jika Anda output lebih dari 1 JSON, sistem akan error atau hanya menjalankan yang pertama.
+2. **Tunggu Hasil:** Setelah memanggil alat, tugas Anda selesai untuk giliran itu. Tunggu user memberikan output alat tersebut.
+
 **DAFTAR ALAT YANG TERSEDIA (ARSENAL BARU):**
 
 **Fase 1: Reconnaissance (Pengumpulan Informasi)**
@@ -201,6 +208,13 @@ async def tool_executor_node(state: AgentState):
     else:
         content = last_message.content
 
+    # Check for multiple actions warning
+    clean_content_warning = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL).strip()
+    json_matches = re.findall(r'```json\s*({.*?})\s*```', clean_content_warning, re.DOTALL)
+    multiple_warning = ""
+    if len(json_matches) > 1:
+        multiple_warning = "\n\n**SYSTEM WARNING:** Multiple tool calls detected. Only the FIRST tool was executed. Please wait for this result and then proceed with the next tool in a NEW turn."
+
     action_data = extract_json_content(content)
     if not action_data:
         return {"messages": [HumanMessage(content="ERROR: JSON format not found or invalid.")]}
@@ -218,7 +232,7 @@ async def tool_executor_node(state: AgentState):
                     result = tool_func.invoke(args)
                 except Exception as e2:
                     result = f"Error: {str(e2)}"
-            output_msg = f"**HASIL ALAT ({tool_name})**:\n{result}\n\nLanjutkan analisis."
+            output_msg = f"**HASIL ALAT ({tool_name})**:\n{result}\n{multiple_warning}\n\nLanjutkan analisis."
         else:
             output_msg = f"ERROR: Unknown tool '{tool_name}'."
     except Exception as e:
