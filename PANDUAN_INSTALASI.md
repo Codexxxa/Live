@@ -1,122 +1,122 @@
 # Panduan Instalasi & Konfigurasi DeepSeek Security Scanner
 
-Panduan ini akan membantu Anda mempersiapkan lingkungan kerja untuk menjalankan agen keamanan AI ini secara maksimal di **Windows (VPS/RDP)**.
-
-Agen ini dirancang untuk bekerja dengan alat-alat keamanan standar industri. Agar fitur "Advance Attack" berfungsi, Anda **WAJIB** menginstal alat-alat eksternal di bawah ini.
+Panduan ini disusun secara LENGKAP agar Anda bisa menginstal semua alat yang dibutuhkan tanpa terkecuali. Tidak ada "dan lain-lain". Ikuti setiap langkah di bawah ini.
 
 ---
 
 ## 1. Prasyarat Sistem
 
-Pastikan sistem Anda sudah terinstall:
-*   **Python 3.10 ke atas**: [Download Python](https://www.python.org/downloads/) (Jangan lupa centang "Add Python to PATH" saat instalasi).
-*   **Git**: [Download Git](https://git-scm.com/downloads) (Opsional, tapi disarankan).
-*   **Go (Golang)**: [Download Go](https://go.dev/dl/) (Diperlukan untuk install Nuclei, TruffleHog, FFUF, dll dengan mudah).
-*   **Google Chrome**: Diperlukan untuk simulasi browser oleh Playwright.
+Sebelum mulai, pastikan Anda memiliki:
+*   **Python 3.10+**: [Download di sini](https://www.python.org/downloads/).
+    *   *PENTING:* Centang opsi **"Add Python to PATH"** saat instalasi.
+*   **Google Chrome**: Diperlukan untuk simulasi browser.
 
 ---
 
-## 2. Instalasi Dasar (Aplikasi)
+## 2. Instalasi Alat Python (Otomatis)
 
-Buka terminal (Command Prompt / PowerShell) di folder proyek ini, lalu jalankan perintah berikut secara berurutan:
+Alat-alat berikut akan diinstal secara otomatis melalui Python:
+*   **Arjun** (Hidden Parameter Discovery)
+*   **Wapiti** (Web Vulnerability Scanner)
+*   **Pwntools** (Exploit Development Library)
+*   **Playwright** (Browser Automation)
 
-```bash
-# 1. Install Library Python yang dibutuhkan
-pip install -r requirements.txt
-
-# 2. Install Browser untuk Playwright
-playwright install chromium
-```
-
----
-
-## 3. Instalasi Alat Eksternal (Wajib untuk Mode Advance)
-
-Agar DeepSeek bisa menggunakan alat-alat canggih seperti **Nuclei**, **FFUF**, **SQLMap**, dan **Dalfox**, Anda harus menginstalnya dan mendaftarkannya ke sistem.
-
-### A. Nuclei (Vulnerability Scanner)
-*   **Via Go (Recommended):**
-    ```cmd
-    go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+**Langkah Instalasi:**
+1.  Buka Terminal (CMD / PowerShell).
+2.  Masuk ke folder proyek ini.
+3.  Jalankan perintah:
+    ```bash
+    pip install -r requirements.txt
+    playwright install chromium
     ```
-*   **Manual (Binary):**
-    1. Download Nuclei dari [Github Releases](https://github.com/projectdiscovery/nuclei/releases).
-    2. Ekstrak dan masukkan file `nuclei.exe` ke folder tools Anda.
-
-### B. FFUF (Fuzz Faster U Fool - Pengganti Wfuzz)
-*   **Via Go:**
-    ```cmd
-    go install github.com/ffuf/ffuf/v2@latest
-    ```
-*   **Manual (Binary):**
-    1. Download FFUF dari [Github Releases](https://github.com/ffuf/ffuf/releases).
-    2. Ekstrak dan ambil file `ffuf.exe`.
-    3. Pindahkan ke folder tools Anda.
-
-### C. SQLMap (Untuk SQL Injection Tingkat Lanjut)
-1.  Download **SQLMap** (Format `.zip`) dari: [sqlmap.org](https://sqlmap.org/)
-2.  Ekstrak file zip tersebut ke folder yang mudah diakses, misal: `C:\Tools\sqlmap`
-3.  **Penting:** Pastikan di dalam folder tersebut ada file `sqlmap.py`.
-
-### D. Dalfox (Untuk XSS Scanning Cepat)
-*   **Via Go:**
-    ```cmd
-    go install github.com/hahwul/dalfox/v2@latest
-    ```
-*   **Manual (Binary):**
-    1. Download dari [Github Releases](https://github.com/hahwul/dalfox/releases).
-    2. Ekstrak dan ambil file `dalfox.exe`.
-
-### E. Nmap (Untuk Port Scanning)
-1.  Download Installer **Nmap** (`.exe`) dari: [nmap.org/download.html](https://nmap.org/download.html)
-2.  Jalankan installer. Nmap biasanya otomatis menambahkan dirinya ke PATH.
 
 ---
 
-## 4. Konfigurasi Environment Variables (PATH)
+## 3. Instalasi Alat Eksternal (Manual & Wajib)
 
-Agar agen bisa memanggil `nuclei`, `ffuf`, `sqlmap`, atau `dalfox` dari mana saja, Anda harus menambahkan folder tempat binary Go atau tools Anda ke **PATH Windows**.
+Alat-alat di bawah ini adalah program independen (binary) yang harus didownload dan didaftarkan ke sistem (PATH) agar bisa dipanggil oleh Agen.
 
-1.  Tekan tombol **Windows**, ketik **"env"**, lalu pilih **"Edit the system environment variables"**.
-2.  Klik tombol **"Environment Variables"** di kanan bawah.
-3.  Di bagian **"System variables"** (bawah), cari variabel bernama **Path**, lalu klik **Edit**.
-4.  Klik **New**, lalu masukkan alamat folder:
-    *   Folder Go Bin (biasanya `C:\Users\<User>\go\bin`).
-    *   Folder Tools Manual (misal `C:\Tools`).
-    *   Folder SQLMap (misal `C:\Tools\sqlmap`).
-5.  Klik **OK** di semua jendela untuk menyimpan.
+### A. NUCLEI (Vulnerability Scanner)
+*Fungsi: Scanner kerentanan modern & cepat.*
+1.  Download file **Zip** untuk Windows dari: [Release Nuclei](https://github.com/projectdiscovery/nuclei/releases)
+    *   Pilih file bernama: `nuclei_x.x.x_windows_amd64.zip`
+2.  Buat folder baru, misal: `C:\Tools\nuclei`
+3.  Ekstrak isi zip (file `nuclei.exe`) ke dalam folder tersebut.
+
+### B. FFUF (Fuzz Faster U Fool)
+*Fungsi: Fuzzing direktori web super cepat (Pengganti Wfuzz).*
+1.  Download file **Zip** dari: [Release FFUF](https://github.com/ffuf/ffuf/releases)
+    *   Pilih file bernama: `ffuf_x.x.x_windows_amd64.zip`
+2.  Buat folder baru, misal: `C:\Tools\ffuf`
+3.  Ekstrak isi zip (file `ffuf.exe`) ke dalam folder tersebut.
+
+### C. TRUFFLEHOG (Secret Scanner)
+*Fungsi: Mencari kunci rahasia/password yang bocor.*
+1.  Download file **Tar.gz** atau **Zip** dari: [Release TruffleHog](https://github.com/trufflesecurity/trufflehog/releases)
+    *   Pilih file bernama: `trufflehog_x.x.x_windows_amd64.tar.gz` (Gunakan 7-Zip atau WinRAR untuk ekstrak).
+2.  Buat folder baru, misal: `C:\Tools\trufflehog`
+3.  Ekstrak file `trufflehog.exe` ke folder tersebut.
+
+### D. SQLMAP (SQL Injection Tool)
+*Fungsi: Eksploitasi database otomatis.*
+1.  Download file **Zip** dari: [Website SQLMap](https://sqlmap.org/)
+2.  Buat folder baru, misal: `C:\Tools\sqlmap`
+3.  Ekstrak seluruh isi zip ke folder tersebut.
+4.  Pastikan ada file `sqlmap.py` di dalam `C:\Tools\sqlmap`.
+
+### E. DALFOX (XSS Scanner)
+*Fungsi: Scanner khusus celah XSS.*
+1.  Download file **Zip/Tar** dari: [Release Dalfox](https://github.com/hahwul/dalfox/releases)
+    *   Pilih file bernama: `dalfox_x.x.x_windows_amd64.zip`
+2.  Buat folder baru, misal: `C:\Tools\dalfox`
+3.  Ekstrak file `dalfox.exe` ke folder tersebut.
+
+### F. NMAP (Port Scanner)
+*Fungsi: Melihat port/layanan yang terbuka.*
+1.  Download Installer (`.exe`) dari: [Website Nmap](https://nmap.org/download.html)
+    *   Pilih "Latest Stable Release Self-Installer".
+2.  Jalankan Installer dan ikuti petunjuk (Next > Next > Finish).
 
 ---
 
-## 5. Verifikasi Instalasi
+## 4. Konfigurasi PATH (SANGAT PENTING)
 
-Tutup terminal lama Anda dan buka terminal **baru**. Coba ketik perintah berikut:
+Agar Agen bisa menemukan alat-alat di atas, Anda harus memberi tahu Windows di mana letak folder-foldernya.
+
+1.  Tekan tombol **Windows**, ketik **"env"**, pilih **"Edit the system environment variables"**.
+2.  Klik tombol **"Environment Variables"** (kanan bawah).
+3.  Di kolom bawah (**System variables**), cari baris bernama **Path**, lalu klik **Edit**.
+4.  Klik **New** dan masukkan alamat folder satu per satu:
+    *   `C:\Tools\nuclei`
+    *   `C:\Tools\ffuf`
+    *   `C:\Tools\trufflehog`
+    *   `C:\Tools\sqlmap`
+    *   `C:\Tools\dalfox`
+    *   *(Untuk Nmap biasanya otomatis masuk, tapi jika tidak, tambahkan folder instalasinya)*
+5.  Klik **OK** di semua jendela.
+
+---
+
+## 5. Cek Kesuksesan Instalasi
+
+Tutup terminal lama, buka **Terminal Baru**. Ketik perintah ini satu per satu untuk memastikan tidak ada error:
 
 ```cmd
-# Cek Nuclei
 nuclei -version
-
-# Cek FFUF
 ffuf -version
-
-# Cek Arjun (sudah via pip)
-arjun --help
-
-# Cek Wapiti (sudah via pip)
-wapiti --help
-
-# Cek SQLMap
+trufflehog --version
 sqlmap --version
-
-# Cek Dalfox
 dalfox version
+nmap --version
+arjun --help
+wapiti --help
 ```
 
-Jika semua perintah di atas tidak error, maka **DeepSeek Security Scanner** siap digunakan dalam mode Full Power!
+Jika semua perintah di atas menampilkan versi/help, maka instalasi **SUKSES 100%**.
 
 ---
 
-## 6. Menjalankan Aplikasi
+## 6. Jalankan Agen
 
 ```bash
 python main.py

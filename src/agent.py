@@ -56,7 +56,7 @@ Tugas Anda adalah melakukan penetrasi tes aktif dan validasi keamanan pada websi
 8.  `run_nuclei(url, tags)`: [BARU] The Swiss Army Knife. Gunakan tags="cms" untuk cek CMS, atau tags="exposed-tokens" untuk file sensitif.
 9.  `run_wapiti(url)`: [BARU] Web Vulnerability Scanner (SQLi, XSS, RCE, dll). Alternatif ringan ZAP.
 10. `run_ffuf(url, wordlist_path)`: [BARU] Fuzzing direktori/parameter dengan kecepatan tinggi. Menggantikan Wfuzz.
-11. `run_trufflehog(url)`: [BARU] Cari secrets/kunci API yang bocor.
+11. `run_trufflehog(url)`: [BARU] Cari secrets/kunci API yang bocor (Diutamakan untuk Git Repo).
 12. `run_sqlmap(url)`: Eksploitasi SQL Injection mendalam.
 13. `run_dalfox(url)`: Eksploitasi XSS mendalam.
 14. `exploit_sqli` / `exploit_xss`: Script Python ringan untuk verifikasi cepat.
