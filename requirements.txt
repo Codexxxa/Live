@@ -58,6 +58,5 @@ playwright==1.55.0
 playwright-stealth
 arjun
 wapiti3
-wfuzz
 pwntools
 trufflehog3

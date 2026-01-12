@@ -116,24 +116,47 @@ def run_wapiti(url: str) -> str:
         return f"Error running Wapiti: {str(e)}"
 
 @tool
-def run_wfuzz(url: str, path: str = "FUZZ") -> str:
+def run_ffuf(url: str, wordlist_path: Optional[str] = None) -> str:
     """
-    [ACTIVE SCANNER] Runs Wfuzz for fuzzing.
+    [ACTIVE SCANNER] Runs FFUF (Fuzz Faster U Fool) for fuzzing directories or parameters.
+    Replaces Wfuzz.
     Args:
-        url: URL with 'FUZZ' keyword or base url.
-        path: The fuzzing payload location if not in url.
+        url: Target URL. Use 'FUZZ' keyword to mark injection point (e.g., http://target/FUZZ).
+             If 'FUZZ' is not present, it will default to directory discovery at the end.
+        wordlist_path: Path to the wordlist file.
     """
-    wfuzz_path = get_executable_path("wfuzz")
-    if not wfuzz_path:
-        return "ERROR: Wfuzz not found."
+    ffuf_path = get_executable_path("ffuf")
+    if not ffuf_path:
+        return "ERROR: FFUF not found in PATH. Please install FFUF."
 
-    # Simple common wordlist check
-    # Note: Requires a wordlist. We assume a standard small one or fail.
-    # We'll try to find a wordlist or use a built-in one if we ship it.
-    # For now, let's assume user has wordlists or we skip.
-    # Actually, without a wordlist, wfuzz is useless.
-    # We will try a very small heuristic or return error asking for wordlist path.
-    return "Wfuzz requires a wordlist path. Please use 'send_custom_request' or 'scan_attack_surface' for now, or ensure wordlists are configured."
+    # Validate or set default wordlist
+    # Note: On a real VPS, user usually has SecLists. We will try common paths or ask user.
+    if not wordlist_path:
+         # Try heuristics or fail
+         # For simplicity, if no wordlist is provided, we can't fuzz effectively.
+         return "ERROR: FFUF requires a wordlist. Please provide 'wordlist_path' argument."
+
+    if "FUZZ" not in url:
+        if not url.endswith("/"):
+            url += "/"
+        url += "FUZZ"
+
+    # cmd: ffuf -u [url] -w [wordlist] -mc 200,301,302,403
+    cmd = [ffuf_path, "-u", url, "-w", wordlist_path, "-mc", "200,301,302,403", "-s"]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=180
+        )
+        if result.stdout:
+            return f"FFUF Found:\n{result.stdout}"
+        return "FFUF finished. No matches found."
+
+    except Exception as e:
+        return f"Error running FFUF: {str(e)}"
 
 @tool
 def run_trufflehog(url: str) -> str:

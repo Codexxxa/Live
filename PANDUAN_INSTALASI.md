@@ -11,7 +11,7 @@ Agen ini dirancang untuk bekerja dengan alat-alat keamanan standar industri. Aga
 Pastikan sistem Anda sudah terinstall:
 *   **Python 3.10 ke atas**: [Download Python](https://www.python.org/downloads/) (Jangan lupa centang "Add Python to PATH" saat instalasi).
 *   **Git**: [Download Git](https://git-scm.com/downloads) (Opsional, tapi disarankan).
-*   **Go (Golang)**: [Download Go](https://go.dev/dl/) (Diperlukan untuk install Nuclei, TruffleHog, dll dengan mudah).
+*   **Go (Golang)**: [Download Go](https://go.dev/dl/) (Diperlukan untuk install Nuclei, TruffleHog, FFUF, dll dengan mudah).
 *   **Google Chrome**: Diperlukan untuk simulasi browser oleh Playwright.
 
 ---
@@ -21,7 +21,7 @@ Pastikan sistem Anda sudah terinstall:
 Buka terminal (Command Prompt / PowerShell) di folder proyek ini, lalu jalankan perintah berikut secara berurutan:
 
 ```bash
-# 1. Install Library Python yang dibutuhkan (termasuk Wapiti, Arjun, Wfuzz, Pwntools, dll)
+# 1. Install Library Python yang dibutuhkan
 pip install -r requirements.txt
 
 # 2. Install Browser untuk Playwright
@@ -32,7 +32,7 @@ playwright install chromium
 
 ## 3. Instalasi Alat Eksternal (Wajib untuk Mode Advance)
 
-Agar DeepSeek bisa menggunakan alat-alat canggih seperti **Nuclei**, **SQLMap**, dan **Dalfox**, Anda harus menginstalnya dan mendaftarkannya ke sistem.
+Agar DeepSeek bisa menggunakan alat-alat canggih seperti **Nuclei**, **FFUF**, **SQLMap**, dan **Dalfox**, Anda harus menginstalnya dan mendaftarkannya ke sistem.
 
 ### A. Nuclei (Vulnerability Scanner)
 *   **Via Go (Recommended):**
@@ -43,12 +43,22 @@ Agar DeepSeek bisa menggunakan alat-alat canggih seperti **Nuclei**, **SQLMap**,
     1. Download Nuclei dari [Github Releases](https://github.com/projectdiscovery/nuclei/releases).
     2. Ekstrak dan masukkan file `nuclei.exe` ke folder tools Anda.
 
-### B. SQLMap (Untuk SQL Injection Tingkat Lanjut)
+### B. FFUF (Fuzz Faster U Fool - Pengganti Wfuzz)
+*   **Via Go:**
+    ```cmd
+    go install github.com/ffuf/ffuf/v2@latest
+    ```
+*   **Manual (Binary):**
+    1. Download FFUF dari [Github Releases](https://github.com/ffuf/ffuf/releases).
+    2. Ekstrak dan ambil file `ffuf.exe`.
+    3. Pindahkan ke folder tools Anda.
+
+### C. SQLMap (Untuk SQL Injection Tingkat Lanjut)
 1.  Download **SQLMap** (Format `.zip`) dari: [sqlmap.org](https://sqlmap.org/)
 2.  Ekstrak file zip tersebut ke folder yang mudah diakses, misal: `C:\Tools\sqlmap`
 3.  **Penting:** Pastikan di dalam folder tersebut ada file `sqlmap.py`.
 
-### C. Dalfox (Untuk XSS Scanning Cepat)
+### D. Dalfox (Untuk XSS Scanning Cepat)
 *   **Via Go:**
     ```cmd
     go install github.com/hahwul/dalfox/v2@latest
@@ -57,7 +67,7 @@ Agar DeepSeek bisa menggunakan alat-alat canggih seperti **Nuclei**, **SQLMap**,
     1. Download dari [Github Releases](https://github.com/hahwul/dalfox/releases).
     2. Ekstrak dan ambil file `dalfox.exe`.
 
-### D. Nmap (Untuk Port Scanning)
+### E. Nmap (Untuk Port Scanning)
 1.  Download Installer **Nmap** (`.exe`) dari: [nmap.org/download.html](https://nmap.org/download.html)
 2.  Jalankan installer. Nmap biasanya otomatis menambahkan dirinya ke PATH.
 
@@ -65,7 +75,7 @@ Agar DeepSeek bisa menggunakan alat-alat canggih seperti **Nuclei**, **SQLMap**,
 
 ## 4. Konfigurasi Environment Variables (PATH)
 
-Agar agen bisa memanggil `nuclei`, `sqlmap`, atau `dalfox` dari mana saja, Anda harus menambahkan folder tempat binary Go atau tools Anda ke **PATH Windows**.
+Agar agen bisa memanggil `nuclei`, `ffuf`, `sqlmap`, atau `dalfox` dari mana saja, Anda harus menambahkan folder tempat binary Go atau tools Anda ke **PATH Windows**.
 
 1.  Tekan tombol **Windows**, ketik **"env"**, lalu pilih **"Edit the system environment variables"**.
 2.  Klik tombol **"Environment Variables"** di kanan bawah.
@@ -86,14 +96,14 @@ Tutup terminal lama Anda dan buka terminal **baru**. Coba ketik perintah berikut
 # Cek Nuclei
 nuclei -version
 
+# Cek FFUF
+ffuf -version
+
 # Cek Arjun (sudah via pip)
 arjun --help
 
 # Cek Wapiti (sudah via pip)
 wapiti --help
-
-# Cek Wfuzz (sudah via pip)
-wfuzz --help
 
 # Cek SQLMap
 sqlmap --version
