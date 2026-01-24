@@ -9,8 +9,32 @@ def repair_video(input_path):
     menggunakan FFmpeg ke format standar (H.264/AAC MP4).
     """
     if not os.path.exists(input_path):
-        print(Fore.RED + f"Error: File tidak ditemukan: {input_path}")
+        print(Fore.RED + f"Error: Path tidak ditemukan: {input_path}")
         return None
+
+    # Handle jika input adalah folder
+    if os.path.isdir(input_path):
+        print(Fore.YELLOW + f"Path '{input_path}' adalah folder.")
+        print("Mencari file video di dalam folder...")
+
+        valid_extensions = ('.mp4', '.avi', '.mov', '.mkv', '.flv', '.ts')
+        found_video = None
+
+        try:
+            for f in os.listdir(input_path):
+                if f.lower().endswith(valid_extensions):
+                    found_video = os.path.join(input_path, f)
+                    break
+        except Exception as e:
+            print(Fore.RED + f"Error saat membaca folder: {e}")
+            return None
+
+        if found_video:
+            print(Fore.GREEN + f"Ditemukan video: {os.path.basename(found_video)}")
+            input_path = found_video
+        else:
+            print(Fore.RED + "Tidak ada file video valid (mp4/avi/mov/mkv/flv/ts) di dalam folder.")
+            return None
 
     # Buat nama file output: filename_fixed.mp4
     directory, filename = os.path.split(input_path)
@@ -53,7 +77,11 @@ def repair_video(input_path):
 
     except subprocess.CalledProcessError as e:
         print(Fore.RED + f"\n[GAGAL] Terjadi error saat memperbaiki video." + Style.RESET_ALL)
-        print(Fore.RED + "Pastikan file input tidak rusak parah (corrupt header)." + Style.RESET_ALL)
+        print(Fore.RED + "Pastikan file input tidak rusak parah (corrupt header) dan FFmpeg terinstall." + Style.RESET_ALL)
+        return None
+    except PermissionError:
+        print(Fore.RED + f"\n[ERROR] Izin ditolak (Permission denied) untuk file: {input_path}" + Style.RESET_ALL)
+        print("Pastikan file tidak sedang dibuka oleh program lain.")
         return None
     except Exception as e:
         print(Fore.RED + f"\n[ERROR] {str(e)}" + Style.RESET_ALL)
