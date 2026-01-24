@@ -5,6 +5,7 @@ import time
 from colorama import init, Fore, Style
 import config_manager
 import streamer
+import video_utils
 
 # Inisialisasi colorama untuk warna di Windows
 init(autoreset=True)
@@ -102,9 +103,10 @@ def main_menu():
         print("2. Atur Konfigurasi")
         print("3. Cek / Test Koneksi FFmpeg")
         print("4. Panduan")
-        print("5. Keluar")
+        print("5. Perbaiki File Video (Fix Error)")
+        print("6. Keluar")
 
-        choice = input(Fore.GREEN + "\nPilih menu (1-5): " + Style.RESET_ALL)
+        choice = input(Fore.GREEN + "\nPilih menu (1-6): " + Style.RESET_ALL)
 
         if choice == '1':
             if not ffmpeg_ok:
@@ -134,6 +136,31 @@ def main_menu():
             show_help()
 
         elif choice == '5':
+            # Video Repair Tool
+            print(Fore.CYAN + "\n--- ALAT PERBAIKAN VIDEO ---")
+            print("Gunakan ini jika streaming error 'No start code', 'NAL units', atau FPS rendah.")
+            print(f"Path Video saat ini: {config['video_path']}")
+
+            confirm = input("Tekan Enter untuk memperbaiki video di atas (atau ketik path lain): ").strip()
+
+            target_path = config['video_path']
+            if confirm:
+                target_path = confirm.replace('"', '') # Handle quotes path
+
+            if not target_path:
+                print(Fore.RED + "Path kosong. Batalkan.")
+            else:
+                fixed_path = video_utils.repair_video(target_path)
+                if fixed_path:
+                    # Tanya user apakah mau update config
+                    update = input(Fore.GREEN + "\nUpdate konfigurasi menggunakan file baru ini? (y/n): ").lower()
+                    if update == 'y':
+                        config_manager.update_config('video_path', fixed_path)
+                        print("Konfigurasi diperbarui!")
+
+            input("\nTekan Enter untuk kembali...")
+
+        elif choice == '6':
             print("Sampai jumpa!")
             sys.exit()
         else:
