@@ -13,15 +13,22 @@ def initialize_config():
             f.write("YOUTUBE_STREAM_KEY=\n")
             f.write("VIDEO_FILE_PATH=\n")
             f.write("STREAM_QUALITY=high\n") # high, medium, low
+            f.write("USE_PROXY=false\n")
 
 def load_config():
     """Membaca konfigurasi dari file .env."""
     initialize_config()
     load_dotenv(ENV_FILE, override=True)
+
+    # Helper untuk convert string "true"/"false" ke boolean
+    use_proxy_str = os.getenv('USE_PROXY', 'false').lower()
+    use_proxy = use_proxy_str == 'true'
+
     return {
         'stream_key': os.getenv('YOUTUBE_STREAM_KEY', ''),
         'video_path': os.getenv('VIDEO_FILE_PATH', ''),
-        'quality': os.getenv('STREAM_QUALITY', 'high')
+        'quality': os.getenv('STREAM_QUALITY', 'high'),
+        'use_proxy': use_proxy
     }
 
 def update_config(key, value):
@@ -31,11 +38,17 @@ def update_config(key, value):
     env_keys = {
         'stream_key': 'YOUTUBE_STREAM_KEY',
         'video_path': 'VIDEO_FILE_PATH',
-        'quality': 'STREAM_QUALITY'
+        'quality': 'STREAM_QUALITY',
+        'use_proxy': 'USE_PROXY'
     }
 
     if key in env_keys:
         env_key = env_keys[key]
+
+        # Jika boolean, convert ke string lowercase untuk .env
+        if isinstance(value, bool):
+            value = str(value).lower()
+
         # set_key akan menulis/mengupdate file .env
         set_key(ENV_FILE, env_key, value)
         return True

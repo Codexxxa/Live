@@ -157,18 +157,28 @@ def start_stream(config):
 
     while True:
         try:
-            # 1. Setup Proxy
-            print("\n[INFO] Mengambil Proxy...")
-            proxy_url = proxy_manager.get_random_proxy()
-            if proxy_url:
-                print(f"[INFO] Proxy Aktif: {proxy_url}")
-                # Set environment variables for FFmpeg to pick up
-                os.environ["HTTP_PROXY"] = proxy_url
-                os.environ["HTTPS_PROXY"] = proxy_url
-                os.environ["http_proxy"] = proxy_url
-                os.environ["https_proxy"] = proxy_url
+            # 1. Setup Proxy (if enabled)
+            use_proxy = config.get('use_proxy', False)
+
+            if use_proxy:
+                print("\n[INFO] Mengambil Proxy...")
+                proxy_url = proxy_manager.get_random_proxy()
+                if proxy_url:
+                    print(f"[INFO] Proxy Aktif: {proxy_url}")
+                    # Set environment variables for FFmpeg to pick up
+                    os.environ["HTTP_PROXY"] = proxy_url
+                    os.environ["HTTPS_PROXY"] = proxy_url
+                    os.environ["http_proxy"] = proxy_url
+                    os.environ["https_proxy"] = proxy_url
+                else:
+                    print("[WARN] Gagal mengambil proxy, menggunakan koneksi langsung.")
+                    # Clear proxy env vars if any
+                    os.environ.pop("HTTP_PROXY", None)
+                    os.environ.pop("HTTPS_PROXY", None)
+                    os.environ.pop("http_proxy", None)
+                    os.environ.pop("https_proxy", None)
             else:
-                print("[WARN] Gagal mengambil proxy, menggunakan koneksi langsung.")
+                print("\n[INFO] Mode Proxy Non-Aktif. Menggunakan koneksi langsung.")
                 # Clear proxy env vars if any
                 os.environ.pop("HTTP_PROXY", None)
                 os.environ.pop("HTTPS_PROXY", None)

@@ -33,9 +33,11 @@ def menu_config():
         print(f"1. Stream Key   : {current_config['stream_key'][:5]}..." if current_config['stream_key'] else "1. Stream Key   : [KOSONG]")
         print(f"2. File/Folder  : {current_config['video_path']}")
         print(f"3. Kualitas     : {current_config['quality']} (high/medium/low)")
-        print("4. Kembali ke Menu Utama")
+        proxy_status = "AKTIF" if current_config.get('use_proxy') else "NON-AKTIF"
+        print(f"4. Proxy        : {proxy_status}")
+        print("5. Kembali ke Menu Utama")
 
-        choice = input(Fore.GREEN + "\nPilih menu (1-4): " + Style.RESET_ALL)
+        choice = input(Fore.GREEN + "\nPilih menu (1-5): " + Style.RESET_ALL)
 
         if choice == '1':
             new_key = input("Masukkan YouTube Stream Key: ").strip()
@@ -59,6 +61,13 @@ def menu_config():
             elif q_choice == 'b': config_manager.update_config('quality', 'medium')
             elif q_choice == 'c': config_manager.update_config('quality', 'low')
         elif choice == '4':
+            # Toggle Proxy
+            new_status = not current_config.get('use_proxy', False)
+            config_manager.update_config('use_proxy', new_status)
+            status_str = "AKTIF" if new_status else "NON-AKTIF"
+            print(f"\nProxy sekarang: {status_str}")
+            time.sleep(1)
+        elif choice == '5':
             break
 
 def show_help():
